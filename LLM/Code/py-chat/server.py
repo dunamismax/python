@@ -1,9 +1,8 @@
-#!/usr/bin/env python3
 """
 server.py
 
-A simple multi-client chat broadcast server with a more reliable
-graceful shutdown on Ctrl+C (KeyboardInterrupt), using socket.settimeout.
+A simple multi-client chat broadcast server with graceful shutdown on Ctrl+C.
+Adds basic colored logging for better visibility.
 """
 
 import socket
@@ -14,6 +13,11 @@ PORT = 8080  # Default port
 
 # Holds (sock, username) for connected clients
 clients = []
+
+# ANSI color codes (optional)
+COLOR_INFO = "\033[92m"  # Green
+COLOR_ERROR = "\033[91m"  # Red
+COLOR_RESET = "\033[0m"  # Reset color
 
 
 def broadcast(message, exclude_sock=None):
@@ -48,7 +52,7 @@ def handle_client(client_sock, addr):
         username = username_data.decode("utf-8").strip()
         clients.append((client_sock, username))
         broadcast(f"{username} joined the chat!\n")
-        print(f"[INFO] {username} connected from {addr}")
+        print(f"{COLOR_INFO}[INFO]{COLOR_RESET} {username} connected from {addr}")
 
         while True:
             data = client_sock.recv(1024)
@@ -58,10 +62,12 @@ def handle_client(client_sock, addr):
             message = data.decode("utf-8").rstrip("\n")
             broadcast(f"{username}: {message}\n")
     except Exception as e:
-        print(f"[ERROR] Connection to {username or addr} lost: {e}")
+        print(
+            f"{COLOR_ERROR}[ERROR]{COLOR_RESET} Connection to {username or addr} lost: {e}"
+        )
     finally:
         # Cleanup on client disconnect
-        print(f"[INFO] {username or addr} disconnected.")
+        print(f"{COLOR_INFO}[INFO]{COLOR_RESET} {username or addr} disconnected.")
         client_sock.close()
         if username and (client_sock, username) in clients:
             clients.remove((client_sock, username))
@@ -73,17 +79,15 @@ def main():
     server_sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
 
     # **Important**: Set a small timeout so accept() doesn't block forever.
-    # This allows KeyboardInterrupt (Ctrl+C) to be caught on Windows.
     server_sock.settimeout(1.0)
 
     server_sock.bind((HOST, PORT))
     server_sock.listen(5)
-    print(f"[INFO] Server listening on {HOST}:{PORT}")
+    print(f"{COLOR_INFO}[INFO]{COLOR_RESET} Server listening on {HOST}:{PORT}")
 
     try:
         # We'll keep running until Ctrl+C is pressed
-        running = True
-        while running:
+        while True:
             try:
                 client_sock, addr = server_sock.accept()
             except socket.timeout:
@@ -99,12 +103,14 @@ def main():
             ).start()
 
     except KeyboardInterrupt:
-        print("\n[INFO] Ctrl+C detected. Initiating shutdown...")
+        print(
+            f"\n{COLOR_INFO}[INFO]{COLOR_RESET} Ctrl+C detected. Initiating shutdown..."
+        )
 
     finally:
         # Close the listening socket so the program can exit cleanly
         server_sock.close()
-        print("[INFO] Server socket closed. Goodbye!")
+        print(f"{COLOR_INFO}[INFO]{COLOR_RESET} Server socket closed. Goodbye!")
 
 
 if __name__ == "__main__":
