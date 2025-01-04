@@ -111,7 +111,7 @@ def curses_chat(stdscr, sock, username):
 
     # Welcome message
     chat_area.addstr(
-        "Welcome to the enhanced chat! Type your messages below.\n",
+        "Welcome to the chat! Type your messages below.\n",
         curses.color_pair(1),
     )
     chat_area.addstr("Type '/quit' to exit.\n\n", curses.color_pair(1))
