@@ -1,0 +1,4 @@
+rich
+tqdm
+send2trash
+paramiko
