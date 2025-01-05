@@ -1,5 +1,16 @@
 # Textual-based CLI/TUI projects
 
+benchmarker
+file-commander
+hello-world-cli
+net-commander
+reminder-app-cli
+reminders-cli
+rust-top
+secure-notes
+weather-app-cli
+weather-cli
+
 ---
 
 ## 1. **Real-Time Stock & Crypto Portfolio Tracker**
