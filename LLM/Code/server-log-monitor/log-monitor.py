@@ -1,12 +1,13 @@
+#!/usr/bin/env python3
 """
 Remote Server Log Viewer & Analyzer using Textual
 
 Features:
 - Interactive TUI for entering SSH credentials (host, user, password, port, log file)
 - Asynchronous SSH log streaming using asyncssh
-- Real-time filter by keyword, severity level, or date range
+- Real-time filtering by keyword, severity level, or date range
 - Highlighting of matched text
-- Split layout with a filter panel and live log view
+- Split layout with a filter panel and a live log view
 - Color-coded log severity levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
 - Mouse and keyboard interaction
 
@@ -22,6 +23,7 @@ When launched, the TUI will prompt you for:
   - Password
   - SSH Port
   - Log File
+
 Click the "Connect" button (or press Enter on it) to establish the SSH connection
 and begin streaming logs. Filters can be applied via the Filter Panel.
 """
@@ -35,7 +37,7 @@ from typing import Optional, List
 import asyncssh
 
 from textual.app import App, ComposeResult
-from textual.containers import Vertical, Horizontal, Container
+from textual.containers import Horizontal, Vertical, Container
 from textual.reactive import reactive
 from textual.widgets import (
     Header,
@@ -43,19 +45,14 @@ from textual.widgets import (
     Label,
     Input,
     Button,
-    Static,
     RichLog,
-    Placeholder,
+    ScrollView,  # Available in latest Textual releases
 )
-from textual.widget import Widget
 
 
 class SSHLogStreamer:
     """
-    A helper class to establish an SSH connection and stream logs.
-
-    This class uses asyncssh to run a 'tail -f' command on the remote server.
-    You can adapt this to run any log streaming command or custom script.
+    Helper class to establish SSH and stream logs via `tail -f`.
     """
 
     def __init__(
@@ -73,13 +70,11 @@ class SSHLogStreamer:
         self.log_file = log_file
         self.port = port
         self.known_hosts = known_hosts
-
-        # The SSH process object for the running command
         self.process = None
 
     async def connect_and_stream_logs(self):
         """
-        Connect to remote host via SSH and yield new log lines as they arrive.
+        Connect to the remote host via SSH and yield new log lines as they appear.
         """
         try:
             conn = await asyncssh.connect(
@@ -89,10 +84,8 @@ class SSHLogStreamer:
                 password=self.password,
                 known_hosts=self.known_hosts,
             )
-            # Tail the log file indefinitely
             self.process = await conn.create_process(f"tail -n 0 -f {self.log_file}")
 
-            # Read lines until process ends (it shouldn't for tail -f)
             async for line in self.process.stdout:
                 yield line.rstrip("\n")
 
@@ -101,7 +94,7 @@ class SSHLogStreamer:
             traceback.print_exc()
 
     async def close(self):
-        """Close the SSH process if it is still running."""
+        """Terminate the SSH log process if it’s still running."""
         try:
             if self.process and not self.process.stdout.at_eof():
                 self.process.terminate()
@@ -110,14 +103,12 @@ class SSHLogStreamer:
 
 
 class FilterUpdated:
-    """Message that is posted by the Filter panel when filters are updated."""
+    """
+    Message passed from the filter panel when filters are changed.
+    """
 
     def __init__(
-        self,
-        keyword: str,
-        severity: str,
-        date_from: str,
-        date_to: str,
+        self, keyword: str, severity: str, date_from: str, date_to: str
     ) -> None:
         self.keyword = keyword
         self.severity = severity
@@ -125,27 +116,18 @@ class FilterUpdated:
         self.date_to = date_to
 
 
-class LogFilterPanel(Widget):
+class LogFilterPanel(Vertical):
     """
-    A panel containing filter controls:
-    - Keyword search (regex)
-    - Severity (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-    - Date range (start/end)
-
-    The panel tracks the current filter state and communicates
-    changes to the main application via FilterUpdated messages.
+    A panel containing filter controls (keyword, severity, date range).
     """
 
-    # Reactive state
+    # Reactive states (optional if you want to track them in real-time)
     keyword: reactive[str] = reactive("")
     severity: reactive[str] = reactive("")
     date_from: reactive[str] = reactive("")
     date_to: reactive[str] = reactive("")
 
     def compose(self) -> ComposeResult:
-        """
-        Create the layout for the filter panel.
-        """
         yield Label("Filters", id="filter-panel-title")
 
         yield Label("Keyword:")
@@ -164,10 +146,9 @@ class LogFilterPanel(Widget):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         """
-        Handle the "Apply Filters" button click.
+        When "Apply Filters" is clicked, gather filter inputs and post FilterUpdated.
         """
         if event.button.id == "apply-filters-btn":
-            # Extract current filter values from the Input widgets
             self.keyword = self.query_one("#keyword-input", Input).value
             self.severity = (
                 self.query_one("#severity-input", Input).value.upper().strip()
@@ -175,25 +156,23 @@ class LogFilterPanel(Widget):
             self.date_from = self.query_one("#date-from-input", Input).value
             self.date_to = self.query_one("#date-to-input", Input).value
 
-            # Post a message that filters have changed
             self.post_message(
                 FilterUpdated(self.keyword, self.severity, self.date_from, self.date_to)
             )
 
 
-class LiveLogPanel(Widget):
+class LiveLogPanel(Vertical):
     """
-    A panel to display incoming log lines in real-time.
-
-    It handles highlighting matched text and color-coding based on severity.
+    Displays incoming log lines in a RichLog, with filtering and highlighting.
     """
 
-    # We keep a list of all lines so we can re-filter when the user changes filters
+    # Keep all lines stored so we can re-filter them as needed
     lines: reactive[List[str]] = reactive([])
 
     def __init__(self, *args, **kwargs):
         super().__init__(*args, **kwargs)
         self.rich_log = RichLog()
+        # Current filter criteria
         self.current_filters = {
             "keyword": "",
             "severity": "",
@@ -206,67 +185,53 @@ class LiveLogPanel(Widget):
 
     def update_log(self, new_line: str) -> None:
         """
-        Insert a new line of text into the RichLog,
-        applying filters and color-coding if needed.
+        Insert a new line into the RichLog, applying filters and any highlighting.
         """
-        # Check filters
         if not self.passes_filters(new_line):
             return
 
-        # Apply highlighting and color coding
+        # Determine color from severity
         severity_color = self.get_severity_color(new_line)
+
+        # Highlight the keyword, if any
         if self.current_filters["keyword"]:
             new_line = self.highlight_keyword(new_line, self.current_filters["keyword"])
 
-        # Write line to RichLog with optional style
         self.rich_log.write(new_line, style=severity_color)
 
     def passes_filters(self, line: str) -> bool:
         """
-        Check if the line passes the current filters:
-        - Regex keyword match
-        - Severity
-        - Date range (assuming logs contain date in some standard format)
+        Check if a log line satisfies the current filters.
         """
         keyword = self.current_filters["keyword"]
         severity = self.current_filters["severity"]
         date_from = self.current_filters["date_from"]
         date_to = self.current_filters["date_to"]
 
-        # Keyword filter (regex or substring)
+        # Keyword filter (regex or substring fallback)
         if keyword:
             try:
                 if not re.search(keyword, line):
                     return False
             except re.error:
-                # If invalid regex, fallback to simple substring match
                 if keyword not in line:
                     return False
 
         # Severity filter
-        if severity and not self.check_severity_in_line(line, severity):
+        if severity and severity not in line:
             return False
 
-        # Date range filter example:
-        # If your log lines have a datetime prefix like "2025-01-05 14:23:12"
+        # Date filter
         if date_from or date_to:
             if not self.check_date_in_line(line, date_from, date_to):
                 return False
 
         return True
 
-    def check_severity_in_line(self, line: str, severity: str) -> bool:
-        """
-        Simple example: check if the severity level is in the line,
-        e.g. "ERROR", "INFO", etc.
-        """
-        return severity in line
-
     def check_date_in_line(self, line: str, date_from: str, date_to: str) -> bool:
         """
-        Extract date from line (example: first 10 chars are YYYY-MM-DD).
-        Compare with date_from and date_to if provided.
-        Adjust logic according to your log date format.
+        Basic date filter: parse the first 10 chars as YYYY-MM-DD.
+        Adjust to your log format as needed.
         """
         try:
             log_date_str = line[:10]
@@ -284,25 +249,23 @@ class LiveLogPanel(Widget):
 
             return True
         except (ValueError, IndexError):
-            # If line doesn't start with a date or invalid format, skip date filter
+            # If we can’t parse a date, skip the filter
             return True
 
     def highlight_keyword(self, line: str, keyword: str) -> str:
         """
-        Surround matching keywords with `[bold red]...[/]` markup for highlighting.
+        Highlight matched keywords with markup (e.g., `[bold red]word[/]`).
         """
         try:
             pattern = re.compile(f"({keyword})", re.IGNORECASE)
             return pattern.sub(r"[bold red]\1[/]", line)
         except re.error:
-            # Fallback to simple replace if the user typed an invalid regex
+            # If invalid regex, fallback to a simple substring replace
             return line.replace(keyword, f"[bold red]{keyword}[/]")
 
     def get_severity_color(self, line: str) -> str:
         """
-        Return a textual style string based on severity.
-        Example: "CRITICAL" => "bold red", "ERROR" => "red", "WARNING" => "yellow",
-        "INFO" => "green", "DEBUG" => "dim".
+        Return a textual style based on severity tokens in the line.
         """
         if "CRITICAL" in line:
             return "bold red"
@@ -316,35 +279,25 @@ class LiveLogPanel(Widget):
             return "dim"
         return ""
 
-    def update_filters(
-        self, keyword: str, severity: str, date_from: str, date_to: str
-    ) -> None:
+    def update_filters(self, keyword: str, severity: str, date_from: str, date_to: str):
         """
-        Update internal filters. This triggers re-checking all lines or a fresh rendering
-        based on your preference.
+        Update filters, then re-check all lines to refresh the display.
         """
         self.current_filters["keyword"] = keyword
         self.current_filters["severity"] = severity
         self.current_filters["date_from"] = date_from
         self.current_filters["date_to"] = date_to
 
-        # Clear and re-display lines with new filters
+        # Re-run filtering on all existing lines
         current_log = list(self.lines)
         self.rich_log.clear()
-        for l in current_log:
-            self.update_log(l)
+        for existing_line in current_log:
+            self.update_log(existing_line)
 
 
-class ConnectionPanel(Widget):
+class ConnectionPanel(Vertical):
     """
-    A panel to enter SSH credentials and connect:
-    - Host
-    - Username
-    - Password
-    - Port
-    - Log file path
-
-    Once the user clicks Connect, it will post a ConnectionRequested message.
+    Panel for SSH connection inputs (host, user, pass, port, log file).
     """
 
     def compose(self) -> ComposeResult:
@@ -368,68 +321,62 @@ class ConnectionPanel(Widget):
         yield Button("Connect", id="connect-btn")
 
 
-class ConnectionRequested:
-    """Message posted by ConnectionPanel when the user clicks Connect."""
-
-    def __init__(self, host: str, user: str, password: str, port: int, logfile: str):
-        self.host = host
-        self.user = user
-        self.password = password
-        self.port = port
-        self.logfile = logfile
-
-
 class LogMonitorApp(App):
     """
-    The main Textual application class.
-
-    It sets up:
-    - Header at the top, Footer at the bottom.
-    - A Horizontal split with:
-        Left side: Connection Panel + Filter Panel
-        Right side: Live Log Panel
-
-    Steps to use:
-    1. Fill out connection details on the left (host, user, pass, port, log file)
-    2. Click "Connect". The app tries to establish SSH connection and starts streaming logs.
-    3. Use the filter panel (on the left, below connection fields) to filter logs in real-time.
+    Main Textual app. Sets up:
+      - Header, Footer
+      - A horizontal split:
+          - Left side (scrollable) with connection & filter panels
+          - Right side for the log panel
     """
 
     CSS = """
+    Screen {
+        layout: horizontal;
+    }
+
+    /* Left pane: scrollable */
+    #left_pane {
+        width: 35%;
+        min-width: 25%;
+        max-width: 45%;
+        border-right: solid 1px #666;
+    }
+
+    #right_pane {
+        width: 65%;
+        min-width: 55%;
+    }
+
+    /* Titles */
     #connection-panel-title,
     #filter-panel-title {
         content-align: center middle;
         text-style: bold;
-        margin: 0.5 0;
+        margin: 0.5 1 0.5 1; /* top, right, bottom, left */
     }
 
-    #connect-btn,
-    #apply-filters-btn {
-        margin: 1 0;
+    Label {
+        margin: 0.5;
     }
 
-    #host-input,
-    #user-input,
-    #password-input,
-    #port-input,
-    #logfile-input,
-    #keyword-input,
-    #severity-input,
-    #date-from-input,
-    #date-to-input {
-        width: 90%;
-        margin: 1 0;
+    Input {
+        width: 95%;
+        margin: 0.5 0 0 0;
+    }
+
+    Button {
+        margin: 0.5;
+        width: 50%;
+        dock: left;
     }
     """
 
-    # Reactive so we can display error messages or connection statuses
     connection_error: reactive[str] = reactive("")
     connected: reactive[bool] = reactive(False)
 
     def __init__(self):
         super().__init__()
-
-        # Panels
         self.connection_panel = ConnectionPanel()
         self.filter_panel = LogFilterPanel()
         self.live_log_panel = LiveLogPanel()
@@ -440,55 +387,45 @@ class LogMonitorApp(App):
 
     def compose(self) -> ComposeResult:
         """
-        Top-level layout with a header, footer, and horizontal split:
-        - Left side: connection panel + filter panel
-        - Right side: live log panel
+        Build the layout:
+        - Header + Footer
+        - Left side (scrollable) with connection & filter
+        - Right side for log output
         """
-        yield Header(name="Log Monitor (Interactive)")
+        yield Header("Log Monitor (Latest Textual)")
         yield Footer()
 
-        # Left container with connection panel + filter panel in a Vertical layout
-        left_pane = Vertical(
-            Container(self.connection_panel, id="connection_panel"),
-            Container(self.filter_panel, id="filter_panel"),
+        # A ScrollView so the left side scrolls if there's overflow
+        left_side = ScrollView(
+            Vertical(
+                self.connection_panel,
+                self.filter_panel,
+                id="left_container",
+            ),
             id="left_pane",
+            scrollbars=True,
         )
 
-        # Right container with the live log panel
-        right_pane = Container(self.live_log_panel, id="log_panel")
+        # The live logs on the right side
+        right_side = Container(self.live_log_panel, id="right_pane")
 
-        # Horizontal layout: left pane (connection + filter), right pane (log output)
-        main_area = Horizontal(
-            left_pane,
-            right_pane,
-        )
-
-        yield main_area
+        yield left_side
+        yield right_side
 
     async def on_mount(self) -> None:
-        """
-        Called after the UI has been composed and is ready.
-        """
-        # Nothing special to do on mount in this example
+        """Called when the app is first displayed."""
         pass
 
     async def on_unmount(self) -> None:
-        """
-        Called when the application is shutting down.
-        """
-        # Attempt to close the SSH process gracefully
+        """Gracefully shut down the SSH process on exit."""
         if self.streamer:
             await self.streamer.close()
         if self._fetch_logs_task:
             self._fetch_logs_task.cancel()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
-        """
-        Handle button clicks within the entire app.
-        We detect the "Connect" button from the connection panel here.
-        """
+        """Handle the Connect button click."""
         if event.button.id == "connect-btn":
-            # Gather fields from the connection panel
             host = self.connection_panel.query_one("#host-input", Input).value
             user = self.connection_panel.query_one("#user-input", Input).value
             password = self.connection_panel.query_one("#password-input", Input).value
@@ -505,24 +442,20 @@ class LogMonitorApp(App):
             except ValueError:
                 port = 22
 
-            # Post a ConnectionRequested message for clarity (optional)
-            # or just handle it here directly:
             self.handle_connection_request(host, user, password, port, logfile)
 
     def handle_connection_request(
         self, host: str, user: str, password: str, port: int, logfile: str
     ) -> None:
         """
-        Called when the user clicks "Connect". Attempts to create the SSHLogStreamer
-        and start the background task to fetch logs.
+        Called once user hits "Connect". Creates the SSHLogStreamer and starts streaming.
         """
-        # If there's a previous streamer, close it
+        # Close any previous stream
         if self.streamer:
             asyncio.create_task(self.streamer.close())
         if self._fetch_logs_task:
             self._fetch_logs_task.cancel()
 
-        # Create a new SSHLogStreamer with user inputs
         self.streamer = SSHLogStreamer(
             host=host,
             username=user,
@@ -530,28 +463,25 @@ class LogMonitorApp(App):
             port=port,
             log_file=logfile,
         )
-
-        # Start a background task to fetch logs
+        # Background task to fetch logs
         self._fetch_logs_task = asyncio.create_task(self.fetch_logs())
 
     async def fetch_logs(self) -> None:
         """
-        Background task that continuously reads log lines from the remote server
-        and updates the LiveLogPanel.
+        Reads lines from SSH stream and appends them to the log panel.
         """
         if not self.streamer:
             return
 
-        self.connected = True  # Potentially used to track UI states
+        self.connected = True  # Could be used to update UI state
 
         async for line in self.streamer.connect_and_stream_logs():
-            # Each line from the SSH stream is appended, and displayed if it passes filters
             self.live_log_panel.lines.append(line)
             self.live_log_panel.update_log(line)
 
     def on_filter_updated(self, message: FilterUpdated) -> None:
         """
-        Invoked when the Filter panel updates the filters.
+        When filters are updated, pass them to the log panel for re-filtering.
         """
         self.live_log_panel.update_filters(
             keyword=message.keyword,
@@ -559,3 +489,7 @@ class LogMonitorApp(App):
             date_from=message.date_from,
             date_to=message.date_to,
         )
+
+
+if __name__ == "__main__":
+    LogMonitorApp().run()
