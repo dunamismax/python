@@ -48,13 +48,7 @@ from textual.widgets import (
     ListView,
     ListItem,
     Label,
-    TextLog,
-    DataTable,
-    Tree,
-    TreeNode,
-    SelectionList,
-    RadioSet,
-    RadioButton,
+    RichLog,
 )
 from textual.reactive import reactive
 from textual.screen import Screen
@@ -548,7 +542,7 @@ class BaseOperationScreen(Screen):
         yield self.operation_form()
         yield Button(label="Run", id="run-op", variant="success")
         yield Button(label="Back", id="back-op", variant="primary")
-        yield TextLog(id="output-log", highlight=True)
+        yield RichLog(id="output-log", highlight=True)
 
     def operation_form(self):
         """
@@ -564,7 +558,7 @@ class BaseOperationScreen(Screen):
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
         if event.button.id == "run-op":
-            output_widget = self.query_one("#output-log", TextLog)
+            output_widget = self.query_one("#output-log", RichLog)
             result = self.perform_operation()
             output_widget.write(result)
         elif event.button.id == "back-op":

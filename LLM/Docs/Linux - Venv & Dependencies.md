@@ -1,23 +1,48 @@
 # **Virtual Environments & Dependencies – Cheat Sheet (Linux)**
 
-## **1. Check & Install Python**
+## **1. Install and Manage Python with Pyenv**
 
-1. **Check if Python is installed:**
+1. **Install pyenv**
+   Follow the official [pyenv GitHub instructions](https://github.com/pyenv/pyenv#installation) to install pyenv on your Linux distribution. Typically, you’ll:
+   - Install required dependencies (build tools, libraries, etc.).
+   - Clone the pyenv repository.
+   - Add pyenv initialization to your shell (`.bashrc`, `.zshrc`, etc.).
+
+2. **Install a specific Python version using pyenv**
 
    ```bash
-   python3 --version
+   # List all available Python versions
+   pyenv install --list
+
+   # Install a specific version (example: 3.13.1)
+   pyenv install 3.13.1
    ```
 
-2. **If not installed**, use your distro’s package manager (e.g., Ubuntu/Debian):
+3. **Set global or local Python version**
+   - **Global (system-wide default)**
 
-   ```bash
-   sudo apt update
-   sudo apt install python3 python3-venv python3-pip
-   ```
+     ```bash
+     pyenv global 3.13.1
+     ```
+
+   - **Local (per-project)**
+
+     ```bash
+     cd /path/to/your/project
+     pyenv local 3.13.1
+     ```
+
+   - Confirm with:
+
+     ```bash
+     python --version
+     ```
 
 ---
 
 ## **2. Create & Activate a Virtual Environment**
+
+> **Tip**: Now that pyenv is managing your Python versions, any `python` or `python3` references below will use the version(s) you set with pyenv.
 
 1. **Go to your project folder:**
 
@@ -28,8 +53,10 @@
 2. **Create the virtual environment:**
 
    ```bash
-   python3 -m venv .venv
+   python -m venv .venv
    ```
+
+   > This uses the Python version managed by pyenv (either the local or global one you chose).
 
 3. **Activate the environment:**
 
@@ -38,6 +65,7 @@
    ```
 
    - Your prompt now shows `(.venv)` to indicate activation.
+
 4. **Deactivate the environment:**
 
    ```bash
@@ -88,4 +116,4 @@
 
 ---
 
-**Use this cheat sheet to keep Python environments on Linux clean, consistent, and easy to maintain.**
+**Use this cheat sheet to maintain clean, consistent Python environments on Linux—powered by pyenv for flexible version management.**
