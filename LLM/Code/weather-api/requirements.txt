@@ -1,4 +1,3 @@
 textual
 requests
-dnspython
-scapy
+python-dotenv

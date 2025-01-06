@@ -1,4 +1,4 @@
-rich
+textual
 tqdm
 send2trash
 paramiko

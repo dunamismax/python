@@ -1,23 +1,22 @@
 #!/usr/bin/env python3
-"""
-file-commander: A cross-platform, menu-driven file operations utility.
 
-Features Included:
-------------------
-1. Interactive Menu (with colorized output via Rich)
-2. List contents of a directory
-3. Create a file or folder
-4. Rename items (single or batch)
-5. Delete items (optionally sends to trash via send2trash)
-6. Move or copy items
-7. Change permissions (chmod-like)
-8. Create symbolic or hard links
-9. Compress/decompress (ZIP/TAR) with progress bars via tqdm
-10. Generate checksums (MD5, SHA1, SHA256)
-11. FTP transfer (upload/download via ftplib)
-12. SFTP transfer (via paramiko)
-13. Preview text files
-14. Search files (glob or regex)
+"""
+file_commander_textual.py
+
+A cross-platform TUI-driven file operations utility rewritten in Textual.
+Features:
+1. List directory contents
+2. Create files/folders
+3. Rename items (single or batch)
+4. Delete items (with optional trash)
+5. Move/copy items
+6. Change permissions
+7. Create symlinks/hardlinks
+8. Compress/decompress (ZIP/TAR)
+9. Generate checksums (MD5, SHA1, SHA256)
+10. FTP/SFTP transfers
+11. Preview text files
+12. Search files (glob or regex)
 """
 
 import os
@@ -32,139 +31,125 @@ import ftplib
 from pathlib import Path
 from datetime import datetime
 
-# === Third-party imports (install via requirements.txt) ===
-from rich import print  # colorized replacement for built-in print
-from rich.console import Console
-from rich.prompt import Prompt
-from rich.traceback import install as rich_traceback
-from rich.panel import Panel
-from rich.table import Table
-from tqdm import tqdm
+# Third-party imports (make sure they're installed)
 from send2trash import send2trash
 import paramiko
+from tqdm import tqdm
 
-# Initialize Rich console and traceback for nicer error messages
-console = Console()
-rich_traceback()
+# Textual imports
+from textual.app import App, ComposeResult
+from textual.containers import Horizontal, Vertical, Container, ScrollableContainer
+from textual.widgets import (
+    Header,
+    Footer,
+    Static,
+    Button,
+    Input,
+    ListView,
+    ListItem,
+    Label,
+    TextLog,
+    DataTable,
+    Tree,
+    TreeNode,
+    SelectionList,
+    RadioSet,
+    RadioButton,
+)
+from textual.reactive import reactive
+from textual.screen import Screen
+from textual.message import Message
+from textual.message_pump import MessagePump
+from textual.widgets._header import HeaderTitle  # just for advanced usage
+
+# ---------------------------------------------------------------------
+# 1. Helper Functions (adapted from your original script)
+# ---------------------------------------------------------------------
 
 
 def list_items(path, detailed=False, tree=False):
     """
-    List files and directories at the given path.
-
-    :param path: Path to list contents of.
-    :param detailed: If True, show more info (size, modification time).
-    :param tree: If True, display a directory tree (recursive listing).
+    List files/directories under path.
+    Returns text output (string) suitable for printing in Textual, or an error.
     """
     p = Path(path).resolve()
     if not p.exists():
-        console.print(f"[bold red][ERROR][/bold red] Path '{p}' does not exist.")
-        return
+        return f"[ERROR] Path '{p}' does not exist."
+
+    from io import StringIO
+
+    buf = StringIO()
 
     if tree:
-        console.print(Panel.fit(f"Directory Tree for [bold]{p}[/bold]:"))
+        buf.write(f"Directory Tree for {p}:\n")
         for root, dirs, files in os.walk(p):
             level = root.replace(str(p), "").count(os.sep)
             indent = " " * (4 * level)
-            console.print(f"{indent}[bold cyan]{os.path.basename(root)}/[/bold cyan]")
+            buf.write(f"{indent}{os.path.basename(root)}/\n")
             subindent = " " * (4 * (level + 1))
             for f in files:
-                console.print(f"{subindent}{f}")
+                buf.write(f"{subindent}{f}\n")
     else:
-        console.print(Panel.fit(f"Listing contents of: [bold]{p}[/bold]"))
-        table = Table(show_header=True, header_style="bold cyan")
-        table.add_column("Name", justify="left")
-        if detailed:
-            table.add_column("Type", justify="center")
-            table.add_column("Size (bytes)", justify="right")
-            table.add_column("Modified", justify="center")
-
+        buf.write(f"Listing contents of {p}:\n")
         for entry in p.iterdir():
             if detailed:
                 size = entry.stat().st_size
                 mtime = datetime.fromtimestamp(entry.stat().st_mtime)
-                ftype = "DIR" if entry.is_dir() else "FILE"
-                table.add_row(
-                    entry.name,
-                    ftype,
-                    str(size),
-                    mtime.strftime("%Y-%m-%d %H:%M:%S"),
+                ftype = "DIR " if entry.is_dir() else "FILE"
+                buf.write(
+                    f"{entry.name:<30} {ftype:<5} {size:>10} bytes  {mtime.strftime('%Y-%m-%d %H:%M:%S')}\n"
                 )
             else:
-                table.add_row(entry.name)
-        console.print(table)
+                buf.write(f"{entry.name}\n")
+
+    return buf.getvalue()
 
 
 def create_item(item_type, path):
     """
     Create a new file or directory at the given path.
-
-    :param item_type: 'file' or 'folder'
-    :param path: Where to create the item.
     """
     p = Path(path).resolve()
     if p.exists():
-        console.print(f"[bold red][ERROR][/bold red] '{p}' already exists.")
-        return
+        return f"[ERROR] '{p}' already exists."
 
     try:
         if item_type == "file":
             p.touch()
-            console.print(
-                f"[bold green][OK][/bold green] Created file: [bold]{p}[/bold]"
-            )
+            return f"[OK] Created file: {p}"
         elif item_type == "folder":
             p.mkdir(parents=True, exist_ok=True)
-            console.print(
-                f"[bold green][OK][/bold green] Created folder: [bold]{p}[/bold]"
-            )
+            return f"[OK] Created folder: {p}"
         else:
-            console.print(
-                "[bold red][ERROR][/bold red] Unknown item_type. Use 'file' or 'folder'."
-            )
+            return "[ERROR] Unknown item_type. Use 'file' or 'folder'."
     except Exception as e:
-        console.print(f"[bold red][ERROR][/bold red] Could not create {item_type}: {e}")
+        return f"[ERROR] Could not create {item_type}: {e}"
 
 
 def rename_item(source, destination=None, pattern=None, replacement=None):
     """
     Rename or batch-rename items.
-
-    :param source: Path to source file/folder or directory for batch renaming.
-    :param destination: New name or destination path for a single rename (if pattern is None).
-    :param pattern: Regex pattern to find (batch rename).
-    :param replacement: String replacement (batch rename).
+    Returns a string with status.
     """
     src_path = Path(source).resolve()
 
     # Single rename
-    if pattern is None or replacement is None:
+    if not pattern and not replacement:
         if not src_path.exists():
-            console.print(
-                f"[bold red][ERROR][/bold red] Source '{src_path}' does not exist."
-            )
-            return
-        if destination is None:
-            console.print(
-                "[bold red][ERROR][/bold red] Destination not provided for single rename."
-            )
-            return
+            return f"[ERROR] Source '{src_path}' does not exist."
+        if not destination:
+            return "[ERROR] Destination not provided for single rename."
 
         dst_path = Path(destination).resolve()
         try:
             src_path.rename(dst_path)
-            console.print(
-                f"[bold green][OK][/bold green] Renamed '{src_path}' to '{dst_path}'"
-            )
+            return f"[OK] Renamed '{src_path}' to '{dst_path}'"
         except Exception as e:
-            console.print(f"[bold red][ERROR][/bold red] Could not rename: {e}")
+            return f"[ERROR] Could not rename: {e}"
     else:
         # Batch rename within a directory
         if not src_path.is_dir():
-            console.print(
-                f"[bold red][ERROR][/bold red] '{src_path}' must be a directory for batch rename."
-            )
-            return
+            return f"[ERROR] '{src_path}' must be a directory for batch rename."
         count = 0
         regex = re.compile(pattern)
         for child in src_path.iterdir():
@@ -175,175 +160,111 @@ def rename_item(source, destination=None, pattern=None, replacement=None):
                     child.rename(new_path)
                     count += 1
                 except Exception as e:
-                    console.print(
-                        f"[bold red][ERROR][/bold red] Could not rename '{child.name}': {e}"
-                    )
-        console.print(
-            f"[bold green][OK][/bold green] Batch-renamed {count} items in '{src_path}'."
-        )
+                    return f"[ERROR] Could not rename '{child.name}': {e}"
+        return f"[OK] Batch-renamed {count} items in '{src_path}'."
 
 
 def delete_item(path, safe_delete=True):
     """
-    Delete a file or folder with confirmation.
-    By default, uses send2trash for safe_delete; set safe_delete=False to remove permanently.
-
-    :param path: Path to the file or folder to delete.
-    :param safe_delete: If True, move to trash. Otherwise, permanently delete.
+    Delete a file or folder with optional trash usage.
+    Returns a string result.
     """
     p = Path(path).resolve()
     if not p.exists():
-        console.print(f"[bold red][ERROR][/bold red] '{p}' does not exist.")
-        return
+        return f"[ERROR] '{p}' does not exist."
 
-    confirm = Prompt.ask(
-        f"[yellow]Are you sure you want to delete '{p}'?[/yellow]",
-        choices=["y", "n"],
-        default="n",
-    )
-    if confirm.lower() == "y":
-        try:
-            if safe_delete:
-                # Move to trash
-                send2trash(p)
-                console.print(f"[bold green][OK][/bold green] Moved '{p}' to trash.")
+    try:
+        if safe_delete:
+            send2trash(p)
+            return f"[OK] Moved '{p}' to trash."
+        else:
+            if p.is_dir():
+                shutil.rmtree(p)
             else:
-                # Permanently delete
-                if p.is_dir():
-                    shutil.rmtree(p)
-                else:
-                    p.unlink()
-                console.print(
-                    f"[bold green][OK][/bold green] Permanently deleted '{p}'."
-                )
-        except Exception as e:
-            console.print(f"[bold red][ERROR][/bold red] Could not delete '{p}': {e}")
-    else:
-        console.print("[bold cyan][INFO][/bold cyan] Deletion canceled.")
+                p.unlink()
+            return f"[OK] Permanently deleted '{p}'."
+    except Exception as e:
+        return f"[ERROR] Could not delete '{p}': {e}"
 
 
 def move_item(source, destination):
     """
-    Move a file or folder to a new location.
-
-    :param source: Path to the file/folder to move.
-    :param destination: Target path or directory.
+    Move a file or folder.
     """
     src_path = Path(source).resolve()
     dst_path = Path(destination).resolve()
-
     if not src_path.exists():
-        console.print(
-            f"[bold red][ERROR][/bold red] Source '{src_path}' does not exist."
-        )
-        return
-
+        return f"[ERROR] Source '{src_path}' does not exist."
     try:
         shutil.move(str(src_path), str(dst_path))
-        console.print(
-            f"[bold green][OK][/bold green] Moved '{src_path}' -> '{dst_path}'"
-        )
+        return f"[OK] Moved '{src_path}' -> '{dst_path}'"
     except Exception as e:
-        console.print(f"[bold red][ERROR][/bold red] Could not move '{src_path}': {e}")
+        return f"[ERROR] Could not move '{src_path}': {e}"
 
 
 def copy_item(source, destination):
     """
-    Copy a file or folder to a new location.
-
-    :param source: Path to file/folder.
-    :param destination: Target path.
+    Copy a file or folder.
     """
     src_path = Path(source).resolve()
     dst_path = Path(destination).resolve()
-
     if not src_path.exists():
-        console.print(
-            f"[bold red][ERROR][/bold red] Source '{src_path}' does not exist."
-        )
-        return
-
+        return f"[ERROR] Source '{src_path}' does not exist."
     try:
         if src_path.is_dir():
             shutil.copytree(src_path, dst_path)
         else:
             shutil.copy2(src_path, dst_path)
-        console.print(
-            f"[bold green][OK][/bold green] Copied '{src_path}' -> '{dst_path}'"
-        )
+        return f"[OK] Copied '{src_path}' -> '{dst_path}'"
     except Exception as e:
-        console.print(f"[bold red][ERROR][/bold red] Could not copy '{src_path}': {e}")
+        return f"[ERROR] Could not copy '{src_path}': {e}"
 
 
 def chmod_item(path, mode_str):
     """
     Change file/folder permissions in a chmod-like fashion.
-
-    :param path: Path to file/folder.
-    :param mode_str: String representing octal permission (e.g., '755').
     """
     p = Path(path).resolve()
     if not p.exists():
-        console.print(f"[bold red][ERROR][/bold red] '{p}' does not exist.")
-        return
-
+        return f"[ERROR] '{p}' does not exist."
     try:
         mode = int(mode_str, 8)
         os.chmod(p, mode)
-        console.print(
-            f"[bold green][OK][/bold green] Changed mode of '{p}' to {mode_str}"
-        )
+        return f"[OK] Changed mode of '{p}' to {mode_str}"
     except Exception as e:
-        console.print(f"[bold red][ERROR][/bold red] Could not change permissions: {e}")
+        return f"[ERROR] Could not change permissions: {e}"
 
 
 def create_symlink(target, link_name, hard=False):
     """
     Create a symbolic link (or hard link if specified).
-
-    :param target: The target file/folder path.
-    :param link_name: The path where the link should be created.
-    :param hard: If True, create a hard link instead of a symbolic link.
     """
     t = Path(target).resolve()
     l = Path(link_name).resolve()
 
     if not t.exists():
-        console.print(f"[bold red][ERROR][/bold red] Target '{t}' does not exist.")
-        return
-
+        return f"[ERROR] Target '{t}' does not exist."
     try:
-        if hard and os.name == "nt":
-            console.print(
-                "[bold red][ERROR][/bold red] Hard links not fully supported on all Windows versions."
-            )
-            return
         if hard:
+            if os.name == "nt":
+                return "[ERROR] Hard links not fully supported on all Windows versions."
             os.link(t, l)
-            console.print(
-                f"[bold green][OK][/bold green] Created hard link '{l}' -> '{t}'"
-            )
+            return f"[OK] Created hard link '{l}' -> '{t}'"
         else:
             os.symlink(t, l)
-            console.print(
-                f"[bold green][OK][/bold green] Created symbolic link '{l}' -> '{t}'"
-            )
+            return f"[OK] Created symbolic link '{l}' -> '{t}'"
     except Exception as e:
-        console.print(f"[bold red][ERROR][/bold red] Could not create link: {e}")
+        return f"[ERROR] Could not create link: {e}"
 
 
 def compress_items(paths, archive_path, mode="zip"):
     """
     Compress multiple items into an archive.
-
-    :param paths: List of file/folder paths to compress.
-    :param archive_path: Destination archive file path.
-    :param mode: 'zip' or 'tar'
+    Returns a result string.
     """
-    if mode == "zip":
-        try:
+    try:
+        if mode == "zip":
             with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
-                # Use tqdm for a progress bar, especially if there are many files
                 all_files = []
                 for p_str in paths:
                     p = Path(p_str).resolve()
@@ -357,103 +278,58 @@ def compress_items(paths, archive_path, mode="zip"):
                     else:
                         all_files.append((p, p.name))
 
-                for file_path, arcname in tqdm(
-                    all_files, desc="Compressing", unit="file"
-                ):
+                for file_path, arcname in all_files:
                     zf.write(file_path, arcname)
+            return f"[OK] Created ZIP archive '{archive_path}'"
 
-            console.print(
-                f"[bold green][OK][/bold green] Created ZIP archive '[bold]{archive_path}[/bold]'"
-            )
-        except Exception as e:
-            console.print(
-                f"[bold red][ERROR][/bold red] Could not compress to ZIP: {e}"
-            )
-
-    elif mode == "tar":
-        try:
+        elif mode == "tar":
             with tarfile.open(archive_path, "w") as tf:
-                # Similarly, use tqdm for a progress bar
-                all_paths = [Path(p_str).resolve() for p_str in paths]
-                for p in tqdm(all_paths, desc="Compressing", unit="file"):
+                for p_str in paths:
+                    p = Path(p_str).resolve()
                     tf.add(p, arcname=p.name)
+            return f"[OK] Created TAR archive '{archive_path}'"
 
-            console.print(
-                f"[bold green][OK][/bold green] Created TAR archive '[bold]{archive_path}[/bold]'"
-            )
-        except Exception as e:
-            console.print(
-                f"[bold red][ERROR][/bold red] Could not compress to TAR: {e}"
-            )
-
-    else:
-        console.print(
-            "[bold red][ERROR][/bold red] Unsupported compression mode. Use 'zip' or 'tar'."
-        )
+        else:
+            return "[ERROR] Unsupported compression mode. Use 'zip' or 'tar'."
+    except Exception as e:
+        return f"[ERROR] Could not compress: {e}"
 
 
 def decompress_item(archive_path, extract_to, mode="zip"):
     """
     Decompress an archive into a specified directory.
-
-    :param archive_path: Path to the archive file.
-    :param extract_to: Destination directory.
-    :param mode: 'zip' or 'tar'
     """
     ap = Path(archive_path).resolve()
     if not ap.exists():
-        console.print(f"[bold red][ERROR][/bold red] Archive '{ap}' does not exist.")
-        return
+        return f"[ERROR] Archive '{ap}' does not exist."
 
-    if mode == "zip":
-        try:
+    try:
+        if mode == "zip":
             with zipfile.ZipFile(ap, "r") as zf:
-                # Use a tqdm progress bar to show extraction progress
-                members = zf.namelist()
-                for member in tqdm(members, desc="Extracting", unit="file"):
-                    zf.extract(member, extract_to)
-            console.print(
-                f"[bold green][OK][/bold green] Extracted ZIP archive to '[bold]{extract_to}[/bold]'"
-            )
-        except Exception as e:
-            console.print(f"[bold red][ERROR][/bold red] Could not extract ZIP: {e}")
+                zf.extractall(extract_to)
+            return f"[OK] Extracted ZIP archive to '{extract_to}'"
 
-    elif mode == "tar":
-        try:
+        elif mode == "tar":
             with tarfile.open(ap, "r") as tf:
-                # We can’t easily get the full member list as a single list for all tar files,
-                # so we’ll iterate. For large archives, consider a more advanced progress approach.
-                members = tf.getmembers()
-                for member in tqdm(members, desc="Extracting", unit="file"):
-                    tf.extract(member, extract_to)
-            console.print(
-                f"[bold green][OK][/bold green] Extracted TAR archive to '[bold]{extract_to}[/bold]'"
-            )
-        except Exception as e:
-            console.print(f"[bold red][ERROR][/bold red] Could not extract TAR: {e}")
-    else:
-        console.print(
-            "[bold red][ERROR][/bold red] Unsupported decompression mode. Use 'zip' or 'tar'."
-        )
+                tf.extractall(extract_to)
+            return f"[OK] Extracted TAR archive to '{extract_to}'"
+
+        else:
+            return "[ERROR] Unsupported decompression mode. Use 'zip' or 'tar'."
+    except Exception as e:
+        return f"[ERROR] Could not extract: {e}"
 
 
 def generate_checksum(path, algorithm="md5"):
     """
     Generate a file checksum (md5, sha1, sha256).
-
-    :param path: Path to the file.
-    :param algorithm: The hash algorithm ('md5', 'sha1', 'sha256').
     """
     p = Path(path).resolve()
     if not p.exists() or not p.is_file():
-        console.print(f"[bold red][ERROR][/bold red] '{p}' is not a valid file.")
-        return
+        return f"[ERROR] '{p}' is not a valid file."
 
     if algorithm not in ("md5", "sha1", "sha256"):
-        console.print(
-            "[bold red][ERROR][/bold red] Unsupported algorithm. Use 'md5', 'sha1', or 'sha256'."
-        )
-        return
+        return "[ERROR] Unsupported algorithm. Use 'md5', 'sha1', or 'sha256'."
 
     try:
         if algorithm == "md5":
@@ -466,33 +342,20 @@ def generate_checksum(path, algorithm="md5"):
         with p.open("rb") as f:
             for chunk in iter(lambda: f.read(4096), b""):
                 hash_func.update(chunk)
-        console.print(
-            f"[bold green][OK][/bold green] {algorithm.upper()} checksum for '[bold]{p}[/bold]': {hash_func.hexdigest()}"
-        )
+        return f"[OK] {algorithm.upper()} checksum for '{p}': {hash_func.hexdigest()}"
     except Exception as e:
-        console.print(f"[bold red][ERROR][/bold red] Could not compute checksum: {e}")
+        return f"[ERROR] Could not compute checksum: {e}"
 
 
 def ftp_transfer(
     server, port, username, password, local_path, remote_path, upload=True
 ):
     """
-    Simple FTP file transfer using the standard library ftplib.
-
-    :param server: FTP server address.
-    :param port: FTP server port.
-    :param username: FTP username.
-    :param password: FTP password.
-    :param local_path: Path to local file.
-    :param remote_path: Destination path on FTP server.
-    :param upload: If True, upload. If False, download.
+    Simple FTP file transfer using ftplib.
     """
     local_path = Path(local_path).resolve()
     if upload and (not local_path.exists() or not local_path.is_file()):
-        console.print(
-            f"[bold red][ERROR][/bold red] Local file '{local_path}' does not exist for upload."
-        )
-        return
+        return f"[ERROR] Local file '{local_path}' does not exist for upload."
 
     try:
         with ftplib.FTP() as ftp:
@@ -501,17 +364,13 @@ def ftp_transfer(
             if upload:
                 with open(local_path, "rb") as f:
                     ftp.storbinary(f"STOR {remote_path}", f)
-                console.print(
-                    f"[bold green][OK][/bold green] Uploaded '{local_path}' to '{server}:{remote_path}'"
-                )
+                return f"[OK] Uploaded '{local_path}' to '{server}:{remote_path}'"
             else:
                 with open(local_path, "wb") as f:
                     ftp.retrbinary(f"RETR {remote_path}", f.write)
-                console.print(
-                    f"[bold green][OK][/bold green] Downloaded '{server}:{remote_path}' to '{local_path}'"
-                )
+                return f"[OK] Downloaded '{server}:{remote_path}' to '{local_path}'"
     except Exception as e:
-        console.print(f"[bold red][ERROR][/bold red] FTP transfer failed: {e}")
+        return f"[ERROR] FTP transfer failed: {e}"
 
 
 def sftp_transfer(
@@ -519,21 +378,10 @@ def sftp_transfer(
 ):
     """
     Secure SFTP file transfer using Paramiko.
-
-    :param server: SFTP server address.
-    :param port: SFTP server port.
-    :param username: SFTP username.
-    :param password: SFTP password.
-    :param local_path: Path to local file.
-    :param remote_path: Destination path on SFTP server.
-    :param upload: If True, upload. If False, download.
     """
     local_path = Path(local_path).resolve()
     if upload and (not local_path.exists() or not local_path.is_file()):
-        console.print(
-            f"[bold red][ERROR][/bold red] Local file '{local_path}' does not exist for upload."
-        )
-        return
+        return f"[ERROR] Local file '{local_path}' does not exist for upload."
 
     try:
         transport = paramiko.Transport((server, port))
@@ -542,70 +390,51 @@ def sftp_transfer(
 
         if upload:
             sftp.put(str(local_path), remote_path)
-            console.print(
-                f"[bold green][OK][/bold green] SFTP uploaded '{local_path}' -> '{server}:{remote_path}'"
-            )
+            result = f"[OK] SFTP uploaded '{local_path}' -> '{server}:{remote_path}'"
         else:
             sftp.get(remote_path, str(local_path))
-            console.print(
-                f"[bold green][OK][/bold green] SFTP downloaded '{server}:{remote_path}' -> '{local_path}'"
-            )
+            result = f"[OK] SFTP downloaded '{server}:{remote_path}' -> '{local_path}'"
 
         sftp.close()
         transport.close()
-
+        return result
     except Exception as e:
-        console.print(f"[bold red][ERROR][/bold red] SFTP transfer failed: {e}")
+        return f"[ERROR] SFTP transfer failed: {e}"
 
 
 def preview_file(path, max_lines=20):
     """
-    Preview a text file directly in the CLI.
-
-    :param path: Path to the text file.
-    :param max_lines: Maximum number of lines to preview.
+    Return the first `max_lines` lines of a text file as a string.
     """
     p = Path(path).resolve()
     if not p.is_file():
-        console.print(f"[bold red][ERROR][/bold red] '{p}' is not a valid file.")
-        return
+        return f"[ERROR] '{p}' is not a valid file."
 
     try:
         with p.open("r", encoding="utf-8", errors="replace") as f:
             lines = f.readlines()
-        console.print(
-            Panel.fit(f"--- Preview of [bold]{p}[/bold] (first {max_lines} lines) ---")
-        )
-        for line in lines[:max_lines]:
-            # Using Rich's print to preserve color if needed
-            console.print(line, end="")
 
+        result = []
+        result.append(f"--- Preview of {p} (first {max_lines} lines) ---\n")
+        for line in lines[:max_lines]:
+            result.append(line)
         if len(lines) > max_lines:
-            console.print(
-                f"\n[bold cyan]--- File truncated. {len(lines) - max_lines} lines not shown. ---[/bold cyan]"
+            result.append(
+                f"\n--- File truncated. {len(lines) - max_lines} lines not shown. ---\n"
             )
+        return "".join(result)
     except Exception as e:
-        console.print(f"[bold red][ERROR][/bold red] Could not preview file: {e}")
+        return f"[ERROR] Could not preview file: {e}"
 
 
 def search_files(directory, pattern, use_regex=False):
     """
-    Search for files by name (glob or regex).
-
-    :param directory: Directory to search in.
-    :param pattern: Glob pattern (e.g., '*.txt') or regex if use_regex=True.
-    :param use_regex: If True, interpret pattern as a regular expression.
+    Search for files by glob or regex pattern.
+    Returns matching paths as a string.
     """
     dir_path = Path(directory).resolve()
     if not dir_path.exists() or not dir_path.is_dir():
-        console.print(
-            f"[bold red][ERROR][/bold red] '{dir_path}' is not a valid directory."
-        )
-        return
-
-    console.print(
-        f"[bold cyan][INFO][/bold cyan] Searching in '[bold]{dir_path}[/bold]' using {'regex' if use_regex else 'glob'}: {pattern}"
-    )
+        return f"[ERROR] '{dir_path}' is not a valid directory."
 
     matches = []
     if use_regex:
@@ -618,178 +447,507 @@ def search_files(directory, pattern, use_regex=False):
         matches = list(dir_path.rglob(pattern))
 
     if matches:
-        console.print("[bold green][OK][/bold green] Found matches:")
-        for m in matches:
-            console.print(m)
+        lines = [f"[OK] Found matches:"]
+        lines += [str(m) for m in matches]
+        return "\n".join(lines)
     else:
-        console.print("[bold cyan][INFO][/bold cyan] No matches found.")
+        return "[INFO] No matches found."
 
 
-def interactive_menu():
+# ---------------------------------------------------------------------
+# 2. Textual Screens & App
+# ---------------------------------------------------------------------
+
+
+class MainMenu(Screen):
     """
-    Provide an interactive menu-driven interface for file-commander.
-    Utilizes Rich for colorized prompts and outputs.
+    Main menu screen with a ListView of operations.
+    When a user selects an operation, we transition to another screen.
     """
-    while True:
-        console.print(
-            "\n[bold magenta]=== file-commander Interactive Menu ===[/bold magenta]"
+
+    BINDINGS = [
+        ("q", "quit_app", "Quit"),
+        ("b", "pop_screen", "Go Back"),
+    ]
+
+    def compose(self) -> ComposeResult:
+        yield Static(
+            "=== file-commander Main Menu ===",
+            id="main-menu-title",
+            classes="bold underline",
         )
-        console.print("1. List directory contents")
-        console.print("2. Create file/folder")
-        console.print("3. Rename file/folder")
-        console.print("4. Delete file/folder")
-        console.print("5. Move file/folder")
-        console.print("6. Copy file/folder")
-        console.print("7. Change permissions")
-        console.print("8. Create link")
-        console.print("9. Compress items")
-        console.print("10. Decompress archive")
-        console.print("11. Generate checksum")
-        console.print("12. FTP transfer")
-        console.print("13. SFTP transfer")
-        console.print("14. Preview text file")
-        console.print("15. Search files")
-        console.print("0. Exit")
+        menu_list = ListView(
+            ListItem(Label("1. List directory contents"), id="menu-list"),
+            ListItem(Label("2. Create file/folder"), id="menu-create"),
+            ListItem(Label("3. Rename file/folder"), id="menu-rename"),
+            ListItem(Label("4. Delete file/folder"), id="menu-delete"),
+            ListItem(Label("5. Move file/folder"), id="menu-move"),
+            ListItem(Label("6. Copy file/folder"), id="menu-copy"),
+            ListItem(Label("7. Change permissions"), id="menu-chmod"),
+            ListItem(Label("8. Create link"), id="menu-link"),
+            ListItem(Label("9. Compress items"), id="menu-compress"),
+            ListItem(Label("10. Decompress archive"), id="menu-decompress"),
+            ListItem(Label("11. Generate checksum"), id="menu-checksum"),
+            ListItem(Label("12. FTP transfer"), id="menu-ftp"),
+            ListItem(Label("13. SFTP transfer"), id="menu-sftp"),
+            ListItem(Label("14. Preview text file"), id="menu-preview"),
+            ListItem(Label("15. Search files"), id="menu-search"),
+            ListItem(Label("0. Exit"), id="menu-exit"),
+        )
+        yield menu_list
 
-        choice = Prompt.ask("[bold]Select an option[/bold]", default="0")
+    def on_list_view_selected(self, event: ListView.Selected) -> None:
+        """
+        Handle menu selection by ID.
+        """
+        selected_id = event.item.id
+        if selected_id == "menu-list":
+            self.app.push_screen(ListDirScreen())
+        elif selected_id == "menu-create":
+            self.app.push_screen(CreateItemScreen())
+        elif selected_id == "menu-rename":
+            self.app.push_screen(RenameItemScreen())
+        elif selected_id == "menu-delete":
+            self.app.push_screen(DeleteItemScreen())
+        elif selected_id == "menu-move":
+            self.app.push_screen(MoveItemScreen())
+        elif selected_id == "menu-copy":
+            self.app.push_screen(CopyItemScreen())
+        elif selected_id == "menu-chmod":
+            self.app.push_screen(ChmodItemScreen())
+        elif selected_id == "menu-link":
+            self.app.push_screen(LinkItemScreen())
+        elif selected_id == "menu-compress":
+            self.app.push_screen(CompressItemsScreen())
+        elif selected_id == "menu-decompress":
+            self.app.push_screen(DecompressItemsScreen())
+        elif selected_id == "menu-checksum":
+            self.app.push_screen(ChecksumScreen())
+        elif selected_id == "menu-ftp":
+            self.app.push_screen(FtpScreen())
+        elif selected_id == "menu-sftp":
+            self.app.push_screen(SftpScreen())
+        elif selected_id == "menu-preview":
+            self.app.push_screen(PreviewScreen())
+        elif selected_id == "menu-search":
+            self.app.push_screen(SearchFilesScreen())
+        elif selected_id == "menu-exit":
+            self.app.exit()
 
-        if choice == "0":
-            console.print("[bold cyan]Exiting interactive mode.[/bold cyan]")
-            break
 
-        elif choice == "1":
-            path = Prompt.ask("Enter path to list", default=".")
-            detailed = Prompt.ask("Detailed listing? (y/N)", default="n").lower() == "y"
-            tree = Prompt.ask("Tree view? (y/N)", default="n").lower() == "y"
-            list_items(path, detailed, tree)
+class BaseOperationScreen(Screen):
+    """
+    A base screen for simple input -> output flow.
+    Subclasses should override `title` and `perform_operation()` as needed.
+    """
 
-        elif choice == "2":
-            item_type = Prompt.ask(
-                "Create file or folder? (file/folder)", default="file"
-            )
-            path = Prompt.ask("Path to create")
-            create_item(item_type, path)
+    title = "Operation"
 
-        elif choice == "3":
-            source = Prompt.ask("Source path")
-            pattern = Prompt.ask(
-                "Batch rename? Enter regex pattern (or leave blank for single rename)",
-                default="",
-            )
-            if pattern:
-                replacement = Prompt.ask("Enter replacement string")
-                rename_item(source, pattern=pattern, replacement=replacement)
-            else:
-                destination = Prompt.ask("New name/destination")
-                rename_item(source, destination=destination)
+    def compose(self) -> ComposeResult:
+        yield Static(self.title, classes="bold underline")
+        yield self.operation_form()
+        yield Button(label="Run", id="run-op", variant="success")
+        yield Button(label="Back", id="back-op", variant="primary")
+        yield TextLog(id="output-log", highlight=True)
 
-        elif choice == "4":
-            path = Prompt.ask("Path to delete")
-            safe = Prompt.ask("Safe delete to trash? (y/N)", default="y").lower() == "y"
-            delete_item(path, safe_delete=safe)
+    def operation_form(self):
+        """
+        Subclasses should return a Container (or similar) with Input fields, etc.
+        """
+        return Container(Static("Override operation_form() in subclass."))
 
-        elif choice == "5":
-            source = Prompt.ask("Source path")
-            destination = Prompt.ask("Destination path")
-            move_item(source, destination)
+    def perform_operation(self) -> str:
+        """
+        Subclasses implement their logic here, returning a result string.
+        """
+        return "[ERROR] Operation not implemented."
 
-        elif choice == "6":
-            source = Prompt.ask("Source path")
-            destination = Prompt.ask("Destination path")
-            copy_item(source, destination)
+    def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "run-op":
+            output_widget = self.query_one("#output-log", TextLog)
+            result = self.perform_operation()
+            output_widget.write(result)
+        elif event.button.id == "back-op":
+            self.app.pop_screen()
 
-        elif choice == "7":
-            path = Prompt.ask("Path to change permissions")
-            mode = Prompt.ask("Octal permission (e.g. 755)")
-            chmod_item(path, mode)
 
-        elif choice == "8":
-            target = Prompt.ask("Target path")
-            link_name = Prompt.ask("Link name/path")
-            hard = Prompt.ask("Hard link? (y/N)", default="n").lower() == "y"
-            create_symlink(target, link_name, hard)
+# Below are a few examples of specific operations.
+# Each is a Screen that collects the required input and calls the helper functions.
 
-        elif choice == "9":
-            archive_path = Prompt.ask("Output archive path")
-            mode = Prompt.ask("Mode (zip/tar)", default="zip").lower()
-            items_input = Prompt.ask("Enter file/folder paths (comma-separated)")
-            items = [item.strip() for item in items_input.split(",")]
-            compress_items(items, archive_path, mode)
 
-        elif choice == "10":
-            archive_path = Prompt.ask("Archive path")
-            extract_to = Prompt.ask("Extract to directory", default=".")
-            mode = Prompt.ask("Mode (zip/tar)", default="zip").lower()
-            decompress_item(archive_path, extract_to, mode)
+class ListDirScreen(BaseOperationScreen):
+    title = "List Directory Contents"
 
-        elif choice == "11":
-            path = Prompt.ask("File path")
-            algo = Prompt.ask("Algorithm (md5/sha1/sha256)", default="md5").lower()
-            generate_checksum(path, algo)
+    def operation_form(self):
+        return Vertical(
+            Static("Path:", classes="label"),
+            Input(placeholder=".", id="path-input"),
+            Static("Detailed? (y/n):", classes="label"),
+            Input(placeholder="n", id="detailed-input"),
+            Static("Tree? (y/n):", classes="label"),
+            Input(placeholder="n", id="tree-input"),
+        )
 
-        elif choice == "12":
-            server = Prompt.ask("FTP server address")
-            port_str = Prompt.ask("FTP server port (default 21)", default="21")
-            try:
-                port = int(port_str)
-            except ValueError:
-                port = 21
-            username = Prompt.ask("Username")
-            password = Prompt.ask("Password", password=True)
-            local_path = Prompt.ask("Local file path")
-            remote_path = Prompt.ask("Remote path")
-            direction = Prompt.ask("Upload or Download? (u/d)", default="u").lower()
-            upload = direction == "u"
-            ftp_transfer(
-                server, port, username, password, local_path, remote_path, upload
-            )
+    def perform_operation(self) -> str:
+        path = self.query_one("#path-input", Input).value or "."
+        detailed_str = self.query_one("#detailed-input", Input).value or "n"
+        tree_str = self.query_one("#tree-input", Input).value or "n"
+        detailed = detailed_str.lower() == "y"
+        tree = tree_str.lower() == "y"
+        return list_items(path, detailed, tree)
 
-        elif choice == "13":
-            server = Prompt.ask("SFTP server address")
-            port_str = Prompt.ask("SFTP server port (default 22)", default="22")
-            try:
-                port = int(port_str)
-            except ValueError:
-                port = 22
-            username = Prompt.ask("Username")
-            password = Prompt.ask("Password", password=True)
-            local_path = Prompt.ask("Local file path")
-            remote_path = Prompt.ask("Remote path")
-            direction = Prompt.ask("Upload or Download? (u/d)", default="u").lower()
-            upload = direction == "u"
-            sftp_transfer(
-                server, port, username, password, local_path, remote_path, upload
-            )
 
-        elif choice == "14":
-            path = Prompt.ask("Text file path")
-            try:
-                max_lines = int(
-                    Prompt.ask("Max lines to preview (default 20)", default="20")
-                )
-            except ValueError:
-                max_lines = 20
-            preview_file(path, max_lines)
+class CreateItemScreen(BaseOperationScreen):
+    title = "Create File/Folder"
 
-        elif choice == "15":
-            directory = Prompt.ask("Directory to search", default=".")
-            pattern = Prompt.ask("Pattern (glob or regex)", default="*.txt")
-            use_regex = (
-                Prompt.ask("Is this a regex pattern? (y/N)", default="n").lower() == "y"
-            )
-            search_files(directory, pattern, use_regex)
+    def operation_form(self):
+        return Vertical(
+            Static("Item type (file/folder):", classes="label"),
+            Input(placeholder="file", id="type-input"),
+            Static("Path to create:", classes="label"),
+            Input(placeholder="./new_file.txt", id="path-input"),
+        )
 
+    def perform_operation(self):
+        item_type = self.query_one("#type-input", Input).value or "file"
+        path = self.query_one("#path-input", Input).value or "./new_file.txt"
+        return create_item(item_type, path)
+
+
+class RenameItemScreen(BaseOperationScreen):
+    title = "Rename/Bulk Rename"
+
+    def operation_form(self):
+        return Vertical(
+            Static("Source path:", classes="label"),
+            Input(id="src-input"),
+            Static(
+                "Destination (for single) or leave blank for batch:", classes="label"
+            ),
+            Input(id="dest-input"),
+            Static("Regex pattern (for batch) or leave blank:", classes="label"),
+            Input(id="pattern-input"),
+            Static("Replacement (for batch) or leave blank:", classes="label"),
+            Input(id="replace-input"),
+        )
+
+    def perform_operation(self):
+        src = self.query_one("#src-input", Input).value
+        dest = self.query_one("#dest-input", Input).value
+        pat = self.query_one("#pattern-input", Input).value
+        rep = self.query_one("#replace-input", Input).value
+
+        if pat and rep:
+            return rename_item(src, pattern=pat, replacement=rep)
         else:
-            console.print(
-                "[bold cyan][INFO][/bold cyan] Invalid choice. Please try again."
-            )
+            return rename_item(src, destination=dest)
+
+
+class DeleteItemScreen(BaseOperationScreen):
+    title = "Delete File/Folder"
+
+    def operation_form(self):
+        return Vertical(
+            Static("Path to delete:", classes="label"),
+            Input(id="path-input"),
+            Static("Safe delete to trash? (y/n):", classes="label"),
+            Input(placeholder="y", id="safe-input"),
+        )
+
+    def perform_operation(self):
+        path = self.query_one("#path-input", Input).value
+        safe_str = self.query_one("#safe-input", Input).value or "y"
+        safe = safe_str.lower() == "y"
+        return delete_item(path, safe_delete=safe)
+
+
+class MoveItemScreen(BaseOperationScreen):
+    title = "Move File/Folder"
+
+    def operation_form(self):
+        return Vertical(
+            Static("Source path:", classes="label"),
+            Input(id="src-input"),
+            Static("Destination path:", classes="label"),
+            Input(id="dst-input"),
+        )
+
+    def perform_operation(self):
+        src = self.query_one("#src-input", Input).value
+        dst = self.query_one("#dst-input", Input).value
+        return move_item(src, dst)
+
+
+class CopyItemScreen(BaseOperationScreen):
+    title = "Copy File/Folder"
+
+    def operation_form(self):
+        return Vertical(
+            Static("Source path:", classes="label"),
+            Input(id="src-input"),
+            Static("Destination path:", classes="label"),
+            Input(id="dst-input"),
+        )
+
+    def perform_operation(self):
+        src = self.query_one("#src-input", Input).value
+        dst = self.query_one("#dst-input", Input).value
+        return copy_item(src, dst)
+
+
+class ChmodItemScreen(BaseOperationScreen):
+    title = "Change Permissions"
+
+    def operation_form(self):
+        return Vertical(
+            Static("Path:", classes="label"),
+            Input(id="path-input"),
+            Static("Octal permission (e.g. 755):", classes="label"),
+            Input(id="mode-input"),
+        )
+
+    def perform_operation(self):
+        path = self.query_one("#path-input", Input).value
+        mode_str = self.query_one("#mode-input", Input).value or "755"
+        return chmod_item(path, mode_str)
+
+
+class LinkItemScreen(BaseOperationScreen):
+    title = "Create Link (Symbolic/Hard)"
+
+    def operation_form(self):
+        return Vertical(
+            Static("Target path:", classes="label"),
+            Input(id="target-input"),
+            Static("Link name/path:", classes="label"),
+            Input(id="link-input"),
+            Static("Hard link? (y/n):", classes="label"),
+            Input(placeholder="n", id="hard-input"),
+        )
+
+    def perform_operation(self):
+        target = self.query_one("#target-input", Input).value
+        link_path = self.query_one("#link-input", Input).value
+        hard_str = self.query_one("#hard-input", Input).value or "n"
+        hard = hard_str.lower() == "y"
+        return create_symlink(target, link_path, hard=hard)
+
+
+class CompressItemsScreen(BaseOperationScreen):
+    title = "Compress (ZIP/TAR)"
+
+    def operation_form(self):
+        return Vertical(
+            Static("Items to compress (comma-separated):", classes="label"),
+            Input(id="items-input"),
+            Static("Archive path (e.g. archive.zip):", classes="label"),
+            Input(id="archive-input"),
+            Static("Mode (zip/tar):", classes="label"),
+            Input(placeholder="zip", id="mode-input"),
+        )
+
+    def perform_operation(self):
+        items_raw = self.query_one("#items-input", Input).value
+        items = [item.strip() for item in items_raw.split(",") if item.strip()]
+        archive = self.query_one("#archive-input", Input).value
+        mode = self.query_one("#mode-input", Input).value or "zip"
+        return compress_items(items, archive, mode)
+
+
+class DecompressItemsScreen(BaseOperationScreen):
+    title = "Decompress (ZIP/TAR)"
+
+    def operation_form(self):
+        return Vertical(
+            Static("Archive path:", classes="label"),
+            Input(id="archive-input"),
+            Static("Extract to directory:", classes="label"),
+            Input(placeholder=".", id="extract-input"),
+            Static("Mode (zip/tar):", classes="label"),
+            Input(placeholder="zip", id="mode-input"),
+        )
+
+    def perform_operation(self):
+        archive = self.query_one("#archive-input", Input).value
+        extract_to = self.query_one("#extract-input", Input).value or "."
+        mode = self.query_one("#mode-input", Input).value or "zip"
+        return decompress_item(archive, extract_to, mode)
+
+
+class ChecksumScreen(BaseOperationScreen):
+    title = "Generate Checksum (MD5/SHA1/SHA256)"
+
+    def operation_form(self):
+        return Vertical(
+            Static("File path:", classes="label"),
+            Input(id="file-input"),
+            Static("Algorithm (md5/sha1/sha256):", classes="label"),
+            Input(placeholder="md5", id="algo-input"),
+        )
+
+    def perform_operation(self):
+        fpath = self.query_one("#file-input", Input).value
+        algo = self.query_one("#algo-input", Input).value or "md5"
+        return generate_checksum(fpath, algo)
+
+
+class FtpScreen(BaseOperationScreen):
+    title = "FTP Transfer"
+
+    def operation_form(self):
+        return Vertical(
+            Static("FTP server:", classes="label"),
+            Input(id="server-input"),
+            Static("Port:", classes="label"),
+            Input(placeholder="21", id="port-input"),
+            Static("Username:", classes="label"),
+            Input(id="user-input"),
+            Static("Password:", classes="label"),
+            Input(password=True, id="pass-input"),
+            Static("Local file path:", classes="label"),
+            Input(id="local-input"),
+            Static("Remote path:", classes="label"),
+            Input(id="remote-input"),
+            Static("Upload? (y/n):", classes="label"),
+            Input(placeholder="y", id="upload-input"),
+        )
+
+    def perform_operation(self):
+        server = self.query_one("#server-input", Input).value
+        port_str = self.query_one("#port-input", Input).value or "21"
+        username = self.query_one("#user-input", Input).value
+        password = self.query_one("#pass-input", Input).value
+        local = self.query_one("#local-input", Input).value
+        remote = self.query_one("#remote-input", Input).value
+        upload_str = self.query_one("#upload-input", Input).value or "y"
+
+        try:
+            port = int(port_str)
+        except ValueError:
+            port = 21
+
+        upload = upload_str.lower() == "y"
+        return ftp_transfer(server, port, username, password, local, remote, upload)
+
+
+class SftpScreen(BaseOperationScreen):
+    title = "SFTP Transfer"
+
+    def operation_form(self):
+        return Vertical(
+            Static("SFTP server:", classes="label"),
+            Input(id="server-input"),
+            Static("Port:", classes="label"),
+            Input(placeholder="22", id="port-input"),
+            Static("Username:", classes="label"),
+            Input(id="user-input"),
+            Static("Password:", classes="label"),
+            Input(password=True, id="pass-input"),
+            Static("Local file path:", classes="label"),
+            Input(id="local-input"),
+            Static("Remote path:", classes="label"),
+            Input(id="remote-input"),
+            Static("Upload? (y/n):", classes="label"),
+            Input(placeholder="y", id="upload-input"),
+        )
+
+    def perform_operation(self):
+        server = self.query_one("#server-input", Input).value
+        port_str = self.query_one("#port-input", Input).value or "22"
+        username = self.query_one("#user-input", Input).value
+        password = self.query_one("#pass-input", Input).value
+        local = self.query_one("#local-input", Input).value
+        remote = self.query_one("#remote-input", Input).value
+        upload_str = self.query_one("#upload-input", Input).value or "y"
+
+        try:
+            port = int(port_str)
+        except ValueError:
+            port = 22
+
+        upload = upload_str.lower() == "y"
+        return sftp_transfer(server, port, username, password, local, remote, upload)
+
+
+class PreviewScreen(BaseOperationScreen):
+    title = "Preview Text File"
+
+    def operation_form(self):
+        return Vertical(
+            Static("File path:", classes="label"),
+            Input(id="file-input"),
+            Static("Max lines:", classes="label"),
+            Input(placeholder="20", id="lines-input"),
+        )
+
+    def perform_operation(self):
+        fpath = self.query_one("#file-input", Input).value
+        lines_str = self.query_one("#lines-input", Input).value or "20"
+        try:
+            max_lines = int(lines_str)
+        except ValueError:
+            max_lines = 20
+        return preview_file(fpath, max_lines)
+
+
+class SearchFilesScreen(BaseOperationScreen):
+    title = "Search Files (Glob or Regex)"
+
+    def operation_form(self):
+        return Vertical(
+            Static("Directory to search:", classes="label"),
+            Input(placeholder=".", id="dir-input"),
+            Static("Pattern (glob/regex):", classes="label"),
+            Input(placeholder="*.txt", id="pattern-input"),
+            Static("Use regex? (y/n):", classes="label"),
+            Input(placeholder="n", id="regex-input"),
+        )
+
+    def perform_operation(self):
+        directory = self.query_one("#dir-input", Input).value or "."
+        pattern = self.query_one("#pattern-input", Input).value or "*.txt"
+        regex_str = self.query_one("#regex-input", Input).value or "n"
+        use_regex = regex_str.lower() == "y"
+        return search_files(directory, pattern, use_regex)
+
+
+# ---------------------------------------------------------------------
+# 3. The Main App
+# ---------------------------------------------------------------------
+
+
+class FileCommander(App):
+
+    CSS = """
+    Screen {
+        padding: 1 2;
+    }
+    #main-menu-title {
+        margin-bottom: 1;
+    }
+    .label {
+        margin-top: 1;
+    }
+    #output-log {
+        margin-top: 1;
+        height: 10;
+    }
+    """
+
+    TITLE = "file-commander (Textual Edition)"
+    SUB_TITLE = "A cross-platform TUI for file operations"
+
+    def on_ready(self) -> None:
+        # Immediately show the main menu
+        self.push_screen(MainMenu())
+
+    def action_quit_app(self):
+        self.exit()
 
 
 def main():
-    """
-    Main entry point: Start in interactive mode directly.
-    """
-    interactive_menu()
+    app = FileCommander()
+    app.run()
 
 
 if __name__ == "__main__":
