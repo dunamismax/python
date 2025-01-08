@@ -1,2 +1,3 @@
 typer
 asyncssh
+rich

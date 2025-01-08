@@ -1,22 +1,17 @@
 #!/usr/bin/env python3
 """
-file_commander_typer.py
+file_commander.py (Typer + curses + Rich)
 
-A cross-platform CLI-driven file operations utility rewritten using Typer.
-Features:
-1. List directory contents
-2. Create files/folders
-3. Rename items (single or batch)
-4. Delete items (with optional trash)
-5. Move/copy items
-6. Change permissions
-7. Create symlinks/hardlinks
-8. Compress/decompress (ZIP/TAR)
-9. Generate checksums (MD5, SHA1, SHA256)
-10. FTP/SFTP transfers
-11. Preview text files
-12. Search files (glob or regex)
-13. Optional interactive mode with menu-driven prompts
+A cross-platform TUI/CLI-driven file operations utility.
+
+By default, running `python file_commander.py` with no arguments
+will launch the curses-based TUI.
+
+Explicitly launch the TUI via the `tui` command:
+    python file_commander.py tui
+
+Otherwise, you may invoke any of the subcommands (list, create, move, copy, etc.)
+with normal CLI arguments.
 """
 
 import os
@@ -28,34 +23,48 @@ import re
 import zipfile
 import tarfile
 import ftplib
+import curses
+import paramiko
+from send2trash import send2trash
 from pathlib import Path
 from datetime import datetime
 from typing import List, Optional
 
-# Third-party imports (ensure they're installed)
-from send2trash import send2trash
-import paramiko
-from tqdm import tqdm
+# Typer and Rich
 import typer
+from rich import print as rprint
+from rich.console import Console
+
+app = typer.Typer(help="File Commander: CLI + TUI file manager.")
 
 ##############################################################################
-# 1. Helper Functions (ported from your original script)
+# 1. Helper Functions
 ##############################################################################
+
+
+def _richify(text: str) -> str:
+    """
+    Convert bracket-based tags ([OK], [ERROR], [INFO]) to Rich color styling.
+    """
+    replacements = [
+        ("[OK]", "[bold green][OK][/bold green]"),
+        ("[ERROR]", "[bold red][ERROR][/bold red]"),
+        ("[INFO]", "[bold cyan][INFO][/bold cyan]"),
+    ]
+    for old, new in replacements:
+        text = text.replace(old, new)
+    return text
 
 
 def list_items(path: str, detailed: bool = False, tree: bool = False) -> str:
     """
     List files/directories under `path`.
-    :param path: Path to list.
-    :param detailed: Show size, timestamp, and type info if True.
-    :param tree: Show a recursive directory tree if True.
-    :return: A formatted string of the directory contents or an error message.
     """
+    from io import StringIO
+
     p = Path(path).resolve()
     if not p.exists():
         return f"[ERROR] Path '{p}' does not exist."
-
-    from io import StringIO
 
     buf = StringIO()
     if tree:
@@ -86,9 +95,6 @@ def list_items(path: str, detailed: bool = False, tree: bool = False) -> str:
 def create_item(item_type: str, path: str) -> str:
     """
     Create a new file or directory at the given path.
-    :param item_type: 'file' or 'folder'
-    :param path: The target path where to create the item.
-    :return: Result message.
     """
     p = Path(path).resolve()
     if p.exists():
@@ -115,11 +121,6 @@ def rename_item(
 ) -> str:
     """
     Rename or batch-rename items.
-    :param source: Source path (file or directory).
-    :param destination: Destination path for single rename.
-    :param pattern: Regex pattern for batch rename.
-    :param replacement: Replacement string for batch rename.
-    :return: A string with the rename status.
     """
     src_path = Path(source).resolve()
 
@@ -158,9 +159,6 @@ def rename_item(
 def delete_item(path: str, safe_delete: bool = True) -> str:
     """
     Delete a file or folder with optional trash usage.
-    :param path: The path to delete.
-    :param safe_delete: If True, move to trash. Otherwise, permanently delete.
-    :return: A result message.
     """
     p = Path(path).resolve()
     if not p.exists():
@@ -216,8 +214,6 @@ def copy_item(source: str, destination: str) -> str:
 def chmod_item(path: str, mode_str: str) -> str:
     """
     Change file/folder permissions in a chmod-like fashion.
-    :param path: Target path.
-    :param mode_str: String representation of octal permissions (e.g., "755").
     """
     p = Path(path).resolve()
     if not p.exists():
@@ -233,9 +229,6 @@ def chmod_item(path: str, mode_str: str) -> str:
 def create_symlink(target: str, link_name: str, hard: bool = False) -> str:
     """
     Create a symbolic link (or hard link if specified).
-    :param target: Target path to link to.
-    :param link_name: The name/path of the link to create.
-    :param hard: If True, create a hard link (where supported).
     """
     t = Path(target).resolve()
     l = Path(link_name).resolve()
@@ -258,12 +251,11 @@ def create_symlink(target: str, link_name: str, hard: bool = False) -> str:
 def compress_items(paths: List[str], archive_path: str, mode: str = "zip") -> str:
     """
     Compress multiple items into an archive.
-    :param paths: List of file/directory paths to compress.
-    :param archive_path: Destination archive file (e.g. "archive.zip").
-    :param mode: "zip" or "tar".
     """
     try:
         if mode == "zip":
+            import zlib  # ensure we have compression
+
             with zipfile.ZipFile(archive_path, "w", zipfile.ZIP_DEFLATED) as zf:
                 all_files = []
                 for p_str in paths:
@@ -298,9 +290,6 @@ def compress_items(paths: List[str], archive_path: str, mode: str = "zip") -> st
 def decompress_item(archive_path: str, extract_to: str, mode: str = "zip") -> str:
     """
     Decompress an archive into a specified directory.
-    :param archive_path: The archive file to decompress.
-    :param extract_to: The directory where files will be extracted.
-    :param mode: "zip" or "tar".
     """
     ap = Path(archive_path).resolve()
     if not ap.exists():
@@ -326,8 +315,6 @@ def decompress_item(archive_path: str, extract_to: str, mode: str = "zip") -> st
 def generate_checksum(path: str, algorithm: str = "md5") -> str:
     """
     Generate a file checksum (md5, sha1, sha256).
-    :param path: File path.
-    :param algorithm: Algorithm to use: "md5", "sha1", or "sha256".
     """
     p = Path(path).resolve()
     if not p.exists() or not p.is_file():
@@ -363,13 +350,6 @@ def ftp_transfer(
 ) -> str:
     """
     Simple FTP file transfer using ftplib.
-    :param server: FTP server hostname/IP.
-    :param port: FTP port (usually 21).
-    :param username: FTP username.
-    :param password: FTP password.
-    :param local_path: Local file path (for upload or download destination).
-    :param remote_path: Remote file path (for download or upload destination).
-    :param upload: True to upload, False to download.
     """
     local_path_p = Path(local_path).resolve()
     if upload and (not local_path_p.exists() or not local_path_p.is_file()):
@@ -402,13 +382,6 @@ def sftp_transfer(
 ) -> str:
     """
     Secure SFTP file transfer using Paramiko.
-    :param server: SFTP server hostname/IP.
-    :param port: SFTP port (usually 22).
-    :param username: SFTP username.
-    :param password: SFTP password.
-    :param local_path: Local file path (for upload or download destination).
-    :param remote_path: Remote file path (for download or upload destination).
-    :param upload: True to upload, False to download.
     """
     local_path_p = Path(local_path).resolve()
     if upload and (not local_path_p.exists() or not local_path_p.is_file()):
@@ -438,8 +411,6 @@ def sftp_transfer(
 def preview_file(path: str, max_lines: int = 20) -> str:
     """
     Return the first `max_lines` lines of a text file as a string.
-    :param path: Path to a valid text file.
-    :param max_lines: Maximum lines to read from the file.
     """
     p = Path(path).resolve()
     if not p.is_file():
@@ -463,10 +434,6 @@ def preview_file(path: str, max_lines: int = 20) -> str:
 def search_files(directory: str, pattern: str, use_regex: bool = False) -> str:
     """
     Search for files by glob or regex pattern.
-    :param directory: Directory path to search in.
-    :param pattern: Glob or regex pattern.
-    :param use_regex: If True, interpret `pattern` as a regex.
-    :return: String summarizing matched files.
     """
     dir_path = Path(directory).resolve()
     if not dir_path.exists() or not dir_path.is_dir():
@@ -491,369 +458,560 @@ def search_files(directory: str, pattern: str, use_regex: bool = False) -> str:
 
 
 ##############################################################################
-# 2. Typer CLI App
+# 2. curses-based TUI
 ##############################################################################
 
-app = typer.Typer(help="A cross-platform CLI for file operations (Typer Edition).")
+main_menu = [
+    ("List directory contents", "menu_list_items"),
+    ("Create file/folder", "menu_create_item"),
+    ("Rename item(s)", "menu_rename_item"),
+    ("Delete item", "menu_delete_item"),
+    ("Move item", "menu_move_item"),
+    ("Copy item", "menu_copy_item"),
+    ("Change permissions (chmod)", "menu_chmod_item"),
+    ("Create link (symbolic/hard)", "menu_link_item"),
+    ("Compress items (ZIP/TAR)", "menu_compress_item"),
+    ("Decompress archive (ZIP/TAR)", "menu_decompress_item"),
+    ("Generate checksum (MD5/SHA1/SHA256)", "menu_checksum_item"),
+    ("FTP transfer", "menu_ftp_item"),
+    ("SFTP transfer", "menu_sftp_item"),
+    ("Preview text file", "menu_preview_file"),
+    ("Search files", "menu_search_files"),
+    ("Exit", "menu_exit"),
+]
 
 
-@app.command("list")
-def cmd_list_items(
-    path: str = typer.Argument(".", help="Directory path to list."),
-    detailed: bool = typer.Option(
-        False, "--detailed", "-d", help="Show extra details."
-    ),
-    tree: bool = typer.Option(
-        False, "--tree", "-t", help="Show recursive directory tree."
-    ),
+def curses_app(stdscr: "curses._CursesWindow") -> None:
+    """
+    The main curses TUI loop.
+    """
+    curses.curs_set(0)  # Hide cursor
+    curses.start_color()
+    curses.use_default_colors()
+
+    curses.init_pair(1, curses.COLOR_CYAN, -1)  # highlight color
+    curses.init_pair(2, curses.COLOR_WHITE, -1)  # normal text
+
+    current_index = 0
+
+    while True:
+        stdscr.clear()
+        stdscr.addstr(
+            0, 0, "=== File Commander (curses + Typer Edition) ===\n", curses.A_BOLD
+        )
+
+        # Draw menu
+        for idx, (label, _) in enumerate(main_menu):
+            if idx == current_index:
+                stdscr.attron(curses.color_pair(1))
+                stdscr.addstr(idx + 2, 2, f"> {label}")
+                stdscr.attroff(curses.color_pair(1))
+            else:
+                stdscr.attron(curses.color_pair(2))
+                stdscr.addstr(idx + 2, 2, f"  {label}")
+                stdscr.attroff(curses.color_pair(2))
+
+        key = stdscr.getch()
+
+        # Basic navigation with arrow keys or j/k
+        if key in (curses.KEY_UP, ord("k")):
+            current_index = (current_index - 1) % len(main_menu)
+        elif key in (curses.KEY_DOWN, ord("j")):
+            current_index = (current_index + 1) % len(main_menu)
+        elif key in (curses.KEY_ENTER, ord("\n"), ord("\r")):
+            fn_name = main_menu[current_index][1]
+            if fn_name == "menu_exit":
+                return
+            else:
+                handle_menu_action(stdscr, fn_name)
+        elif key in (ord("q"), 27):  # ESC
+            return
+
+
+def handle_menu_action(stdscr: "curses._CursesWindow", action: str) -> None:
+    action_map = {
+        "menu_list_items": menu_list_items,
+        "menu_create_item": menu_create_item,
+        "menu_rename_item": menu_rename_item,
+        "menu_delete_item": menu_delete_item,
+        "menu_move_item": menu_move_item,
+        "menu_copy_item": menu_copy_item,
+        "menu_chmod_item": menu_chmod_item,
+        "menu_link_item": menu_link_item,
+        "menu_compress_item": menu_compress_item,
+        "menu_decompress_item": menu_decompress_item,
+        "menu_checksum_item": menu_checksum_item,
+        "menu_ftp_item": menu_ftp_item,
+        "menu_sftp_item": menu_sftp_item,
+        "menu_preview_file": menu_preview_file,
+        "menu_search_files": menu_search_files,
+    }
+    if action in action_map:
+        action_map[action](stdscr)
+
+
+def get_user_input(
+    stdscr: "curses._CursesWindow", prompt_text: str, default: str = ""
+) -> str:
+    curses.echo()
+    stdscr.clear()
+    stdscr.addstr(0, 0, f"{prompt_text} (default: {default})\n")
+    stdscr.addstr(1, 0, "> ")
+    stdscr.refresh()
+    user_input = stdscr.getstr(1, 2).decode("utf-8").strip()
+    curses.noecho()
+    return user_input if user_input else default
+
+
+def confirm_choice(
+    stdscr: "curses._CursesWindow", prompt_text: str, default: bool = False
+) -> bool:
+    choices = "[y/N]" if not default else "[Y/n]"
+    curses.echo()
+    stdscr.clear()
+    stdscr.addstr(0, 0, f"{prompt_text} {choices}\n")
+    stdscr.addstr(1, 0, "> ")
+    stdscr.refresh()
+    choice = stdscr.getstr(1, 2).decode("utf-8").strip().lower()
+    curses.noecho()
+    if not choice:
+        return default
+    return choice.startswith("y")
+
+
+def display_output(stdscr: "curses._CursesWindow", text: str) -> None:
+    stdscr.clear()
+    lines = text.split("\n")
+    h, w = stdscr.getmaxyx()
+
+    # Simple pager if content exceeds screen height
+    if len(lines) <= (h - 1):
+        for idx, line in enumerate(lines):
+            if idx < h - 1:
+                stdscr.addstr(idx, 0, line)
+    else:
+        page_start = 0
+        while True:
+            stdscr.clear()
+            page_end = page_start + (h - 1)
+            page_lines = lines[page_start:page_end]
+            for idx, line in enumerate(page_lines):
+                stdscr.addstr(idx, 0, line[: w - 1])
+
+            stdscr.addstr(h - 1, 0, "[PgUp/PgDn or q to quit display]")
+            key = stdscr.getch()
+            if key == curses.KEY_PPAGE:  # Page Up
+                page_start = max(0, page_start - (h - 1))
+            elif key == curses.KEY_NPAGE:  # Page Down
+                if page_end < len(lines):
+                    page_start += h - 1
+            elif key in [ord("q"), 27]:
+                break
+    stdscr.addstr(h - 1, 0, "\nPress any key to continue...")
+    stdscr.getch()
+
+
+##############################################################################
+# 3. Menu Functions (curses)
+##############################################################################
+
+
+def menu_list_items(stdscr: "curses._CursesWindow"):
+    path = get_user_input(stdscr, "Path to list?", ".")
+    detailed = confirm_choice(stdscr, "Detailed listing?", False)
+    tree = confirm_choice(stdscr, "Tree view?", False)
+    result = list_items(path, detailed=detailed, tree=tree)
+    display_output(stdscr, result)
+
+
+def menu_create_item(stdscr: "curses._CursesWindow"):
+    item_type = get_user_input(stdscr, "Item type (file/folder)?", "file")
+    path = get_user_input(stdscr, "Path to create?", "./new_file.txt")
+    result = create_item(item_type, path)
+    display_output(stdscr, result)
+
+
+def menu_rename_item(stdscr: "curses._CursesWindow"):
+    src = get_user_input(stdscr, "Source path?")
+    batch = confirm_choice(stdscr, "Batch rename using regex?", False)
+    if batch:
+        pattern = get_user_input(stdscr, "Regex pattern?")
+        replacement = get_user_input(stdscr, "Replacement string?", "")
+        result = rename_item(src, pattern=pattern, replacement=replacement)
+    else:
+        dest = get_user_input(stdscr, "Destination path?")
+        result = rename_item(src, destination=dest)
+    display_output(stdscr, result)
+
+
+def menu_delete_item(stdscr: "curses._CursesWindow"):
+    path = get_user_input(stdscr, "Path to delete?")
+    safe = confirm_choice(stdscr, "Safe delete (to trash)?", True)
+    result = delete_item(path, safe_delete=safe)
+    display_output(stdscr, result)
+
+
+def menu_move_item(stdscr: "curses._CursesWindow"):
+    src = get_user_input(stdscr, "Source path?")
+    dst = get_user_input(stdscr, "Destination path?")
+    result = move_item(src, dst)
+    display_output(stdscr, result)
+
+
+def menu_copy_item(stdscr: "curses._CursesWindow"):
+    src = get_user_input(stdscr, "Source path?")
+    dst = get_user_input(stdscr, "Destination path?")
+    result = copy_item(src, dst)
+    display_output(stdscr, result)
+
+
+def menu_chmod_item(stdscr: "curses._CursesWindow"):
+    path = get_user_input(stdscr, "Path?")
+    mode_str = get_user_input(stdscr, "Octal permission? (e.g., 755)", "755")
+    result = chmod_item(path, mode_str)
+    display_output(stdscr, result)
+
+
+def menu_link_item(stdscr: "curses._CursesWindow"):
+    target = get_user_input(stdscr, "Target path?")
+    link_name = get_user_input(stdscr, "Link name/path?")
+    hard = confirm_choice(stdscr, "Create a hard link?", False)
+    result = create_symlink(target, link_name, hard=hard)
+    display_output(stdscr, result)
+
+
+def menu_compress_item(stdscr: "curses._CursesWindow"):
+    items_raw = get_user_input(stdscr, "Items to compress (comma-separated)?", "")
+    items = [item.strip() for item in items_raw.split(",") if item.strip()]
+    archive = get_user_input(
+        stdscr, "Output archive path? (e.g. archive.zip)", "archive.zip"
+    )
+    mode = get_user_input(stdscr, "Mode (zip/tar)?", "zip")
+    result = compress_items(items, archive, mode)
+    display_output(stdscr, result)
+
+
+def menu_decompress_item(stdscr: "curses._CursesWindow"):
+    archive = get_user_input(stdscr, "Archive path?", "archive.zip")
+    extract_to = get_user_input(stdscr, "Extract to directory?", ".")
+    mode = get_user_input(stdscr, "Mode (zip/tar)?", "zip")
+    result = decompress_item(archive, extract_to, mode)
+    display_output(stdscr, result)
+
+
+def menu_checksum_item(stdscr: "curses._CursesWindow"):
+    fpath = get_user_input(stdscr, "File path?")
+    algo = get_user_input(stdscr, "Algorithm (md5/sha1/sha256)?", "md5")
+    result = generate_checksum(fpath, algo)
+    display_output(stdscr, result)
+
+
+def menu_ftp_item(stdscr: "curses._CursesWindow"):
+    server = get_user_input(stdscr, "FTP server?")
+    port_str = get_user_input(stdscr, "FTP port?", "21")
+    username = get_user_input(stdscr, "Username?")
+    password = get_user_input(stdscr, "Password?", "")
+    local = get_user_input(stdscr, "Local file path?")
+    remote = get_user_input(stdscr, "Remote file path?")
+    up = confirm_choice(stdscr, "Upload instead of download?", True)
+    try:
+        port_int = int(port_str)
+    except ValueError:
+        port_int = 21
+    result = ftp_transfer(server, port_int, username, password, local, remote, up)
+    display_output(stdscr, result)
+
+
+def menu_sftp_item(stdscr: "curses._CursesWindow"):
+    server = get_user_input(stdscr, "SFTP server?")
+    port_str = get_user_input(stdscr, "SFTP port?", "22")
+    username = get_user_input(stdscr, "Username?")
+    password = get_user_input(stdscr, "Password?", "")
+    local = get_user_input(stdscr, "Local file path?")
+    remote = get_user_input(stdscr, "Remote file path?")
+    up = confirm_choice(stdscr, "Upload instead of download?", True)
+    try:
+        port_int = int(port_str)
+    except ValueError:
+        port_int = 22
+    result = sftp_transfer(server, port_int, username, password, local, remote, up)
+    display_output(stdscr, result)
+
+
+def menu_preview_file(stdscr: "curses._CursesWindow"):
+    fpath = get_user_input(stdscr, "File path?")
+    lines_str = get_user_input(stdscr, "Max lines?", "20")
+    try:
+        max_lines = int(lines_str)
+    except ValueError:
+        max_lines = 20
+    result = preview_file(fpath, max_lines)
+    display_output(stdscr, result)
+
+
+def menu_search_files(stdscr: "curses._CursesWindow"):
+    directory = get_user_input(stdscr, "Directory to search?", ".")
+    pattern = get_user_input(stdscr, "Pattern (glob or regex)?", "*.txt")
+    regex = confirm_choice(stdscr, "Use regex?", False)
+    result = search_files(directory, pattern, regex)
+    display_output(stdscr, result)
+
+
+def menu_exit(stdscr: "curses._CursesWindow"):
+    pass  # Exits in the main loop when selected
+
+
+##############################################################################
+# 4. Typer Commands (CLI usage)
+##############################################################################
+
+
+# We add a top-level callback so that if no subcommand is invoked,
+# we launch the curses TUI.
+@app.callback(invoke_without_command=True)
+def main_callback(ctx: typer.Context):
+    """
+    By default, if no arguments/subcommands are passed, launch the TUI.
+    """
+    if ctx.invoked_subcommand is None:
+        curses.wrapper(curses_app)
+        raise typer.Exit()  # Ensure no further Typer processing after TUI
+
+
+@app.command()
+def tui():
+    """
+    Explicitly launch the interactive curses-based TUI.
+    """
+    curses.wrapper(curses_app)
+
+
+@app.command()
+def list(
+    path: str = typer.Argument(".", help="Path to list"),
+    detailed: bool = typer.Option(False, "--detailed", help="Show detailed listing."),
+    tree: bool = typer.Option(False, "--tree", help="Show a recursive directory tree."),
 ):
-    """List directory contents (optionally detailed or as a tree)."""
-    typer.echo(list_items(path, detailed, tree))
+    """
+    List directory contents.
+    """
+    result = list_items(path, detailed, tree)
+    rprint(_richify(result))
 
 
-@app.command("create")
-def cmd_create_item(
-    item_type: str = typer.Argument(..., help="'file' or 'folder'"),
+@app.command()
+def create(
+    item_type: str = typer.Argument(..., help="file or folder"),
     path: str = typer.Argument(..., help="Path to create."),
 ):
-    """Create a new file or directory."""
-    typer.echo(create_item(item_type, path))
+    """
+    Create a new file or folder.
+    """
+    result = create_item(item_type, path)
+    rprint(_richify(result))
 
 
-@app.command("rename")
-def cmd_rename_item(
-    source: str = typer.Argument(
-        ..., help="Source file/folder or directory for batch rename."
+@app.command()
+def rename(
+    source: str = typer.Argument(..., help="Source path (file or directory)."),
+    destination: Optional[str] = typer.Option(None, "--dest", help="Destination path."),
+    pattern: Optional[str] = typer.Option(
+        None, "--pattern", help="Regex pattern for batch rename."
     ),
-    destination: str = typer.Option(
-        None, "--dest", "-d", help="Destination path for single rename."
-    ),
-    pattern: str = typer.Option(
-        None, "--pattern", "-p", help="Regex pattern for batch rename."
-    ),
-    replacement: str = typer.Option(
-        None, "--replacement", "-r", help="Replacement string for batch rename."
+    replacement: Optional[str] = typer.Option(
+        "", "--replacement", help="Regex replacement string."
     ),
 ):
     """
-    Rename an item or batch-rename items using regex.
-    If --pattern and --replacement are provided, batch rename is performed in a directory.
-    Otherwise, a single rename is attempted if --dest is given.
+    Rename or batch-rename items.
     """
-    typer.echo(rename_item(source, destination, pattern, replacement))
+    result = rename_item(source, destination, pattern, replacement)
+    rprint(_richify(result))
 
 
-@app.command("delete")
-def cmd_delete_item(
-    path: str = typer.Argument(..., help="Path to delete."),
+@app.command()
+def delete(
+    path: str = typer.Argument(..., help="File/folder path to delete."),
     safe_delete: bool = typer.Option(
-        True, "--safe/--force", help="Use trash (safe) or permanently delete (force)."
+        True, "--safe/--no-safe", help="Move to trash if safe is True."
     ),
 ):
-    """Delete a file or folder, optionally sending to trash first."""
-    typer.echo(delete_item(path, safe_delete=safe_delete))
+    """
+    Delete a file or folder (safe delete by default).
+    """
+    result = delete_item(path, safe_delete)
+    rprint(_richify(result))
 
 
-@app.command("move")
-def cmd_move_item(
-    source: str = typer.Argument(..., help="Source path."),
-    destination: str = typer.Argument(..., help="Destination path."),
+@app.command()
+def move(
+    source: str = typer.Argument(..., help="Path to move from."),
+    destination: str = typer.Argument(..., help="Path to move to."),
 ):
-    """Move a file or folder from source to destination."""
-    typer.echo(move_item(source, destination))
+    """
+    Move a file or folder.
+    """
+    result = move_item(source, destination)
+    rprint(_richify(result))
 
 
-@app.command("copy")
-def cmd_copy_item(
-    source: str = typer.Argument(..., help="Source path."),
-    destination: str = typer.Argument(..., help="Destination path."),
+@app.command()
+def copy(
+    source: str = typer.Argument(..., help="Path to copy from."),
+    destination: str = typer.Argument(..., help="Path to copy to."),
 ):
-    """Copy a file or folder from source to destination."""
-    typer.echo(copy_item(source, destination))
+    """
+    Copy a file or folder.
+    """
+    result = copy_item(source, destination)
+    rprint(_richify(result))
 
 
-@app.command("chmod")
-def cmd_chmod_item(
-    path: str = typer.Argument(..., help="Path to file/folder."),
-    mode: str = typer.Argument(..., help="Octal permission (e.g. 755)."),
+@app.command()
+def chmod(
+    path: str = typer.Argument(..., help="Path for chmod."),
+    mode_str: str = typer.Argument("755", help="Octal permission string (e.g., 755)."),
 ):
-    """Change file or folder permissions in octal format."""
-    typer.echo(chmod_item(path, mode))
+    """
+    Change file/folder permissions.
+    """
+    result = chmod_item(path, mode_str)
+    rprint(_richify(result))
 
 
-@app.command("link")
-def cmd_create_link(
+@app.command()
+def link(
     target: str = typer.Argument(..., help="Existing target path."),
-    link_name: str = typer.Argument(..., help="Name/path of the link to create."),
+    link_name: str = typer.Argument(..., help="Symlink (or hardlink) name/path."),
     hard: bool = typer.Option(
-        False, "--hard", "-h", help="Create a hard link instead of symlink."
+        False, "--hard/--no-hard", help="Create a hard link if True."
     ),
 ):
-    """Create a symbolic or hard link."""
-    typer.echo(create_symlink(target, link_name, hard))
+    """
+    Create a symbolic or hard link.
+    """
+    result = create_symlink(target, link_name, hard)
+    rprint(_richify(result))
 
 
-@app.command("compress")
-def cmd_compress_items(
+@app.command()
+def compress(
     paths: List[str] = typer.Argument(
-        ..., help="Paths to compress (multiple values allowed)."
+        ..., help="One or more files/folders to compress."
     ),
-    archive_path: str = typer.Argument(..., help="Output archive path."),
-    mode: str = typer.Option(
-        "zip", "--mode", "-m", help="Compression mode: zip or tar."
+    archive_path: str = typer.Argument(
+        ..., help="Output archive path (e.g. archive.zip)"
     ),
+    mode: str = typer.Option("zip", "--mode", help="Compression mode: zip or tar"),
 ):
-    """Compress multiple files/folders into a single ZIP or TAR archive."""
-    typer.echo(compress_items(paths, archive_path, mode))
+    """
+    Compress multiple items into an archive.
+    """
+    result = compress_items(paths, archive_path, mode)
+    rprint(_richify(result))
 
 
-@app.command("decompress")
-def cmd_decompress_item(
-    archive_path: str = typer.Argument(..., help="Archive file path."),
-    extract_to: str = typer.Argument(".", help="Directory to extract files into."),
-    mode: str = typer.Option(
-        "zip", "--mode", "-m", help="Decompression mode: zip or tar."
-    ),
+@app.command()
+def decompress(
+    archive_path: str = typer.Argument(..., help="Path to archive file."),
+    extract_to: str = typer.Argument(".", help="Directory to extract into."),
+    mode: str = typer.Option("zip", "--mode", help="Decompression mode: zip or tar"),
 ):
-    """Decompress a ZIP or TAR archive into the specified directory."""
-    typer.echo(decompress_item(archive_path, extract_to, mode))
+    """
+    Decompress an archive into a specified directory.
+    """
+    result = decompress_item(archive_path, extract_to, mode)
+    rprint(_richify(result))
 
 
-@app.command("checksum")
-def cmd_generate_checksum(
-    path: str = typer.Argument(..., help="File path for checksum."),
+@app.command()
+def checksum(
+    path: str = typer.Argument(..., help="Path to file."),
     algorithm: str = typer.Option(
-        "md5", "--algo", "-a", help="Algorithm: md5, sha1, or sha256."
+        "md5", "--algo", help="Algorithm: md5, sha1, or sha256."
     ),
 ):
-    """Generate a file checksum (MD5, SHA1, or SHA256)."""
-    typer.echo(generate_checksum(path, algorithm))
+    """
+    Generate a file checksum.
+    """
+    result = generate_checksum(path, algorithm)
+    rprint(_richify(result))
 
 
-@app.command("ftp")
-def cmd_ftp_transfer(
-    server: str = typer.Argument(..., help="FTP server address."),
-    port: int = typer.Option(21, "--port", "-P", help="FTP port, default=21."),
-    username: str = typer.Option(..., "--user", "-u", help="FTP username."),
-    password: str = typer.Option(
-        ..., "--pass", "-p", help="FTP password.", prompt=True, hide_input=True
-    ),
-    local_path: str = typer.Argument(..., help="Local file path."),
-    remote_path: str = typer.Argument(..., help="Remote file path."),
+@app.command()
+def ftp(
+    server: str = typer.Option(..., help="FTP server address."),
+    port: int = typer.Option(21, help="FTP server port."),
+    username: str = typer.Option(..., help="FTP username."),
+    password: str = typer.Option("", help="FTP password."),
+    local_path: str = typer.Option(..., help="Local file path."),
+    remote_path: str = typer.Option(..., help="Remote file path on server."),
     upload: bool = typer.Option(
-        True, "--upload/--download", help="Upload or download?"
+        True, "--upload/--download", help="Upload (True) or download (False)."
     ),
 ):
-    """Transfer files via FTP."""
-    typer.echo(
-        ftp_transfer(server, port, username, password, local_path, remote_path, upload)
+    """
+    FTP transfer (upload or download).
+    """
+    result = ftp_transfer(
+        server, port, username, password, local_path, remote_path, upload
     )
+    rprint(_richify(result))
 
 
-@app.command("sftp")
-def cmd_sftp_transfer(
-    server: str = typer.Argument(..., help="SFTP server address."),
-    port: int = typer.Option(22, "--port", "-P", help="SFTP port, default=22."),
-    username: str = typer.Option(..., "--user", "-u", help="SFTP username."),
-    password: str = typer.Option(
-        ..., "--pass", "-p", help="SFTP password.", prompt=True, hide_input=True
-    ),
-    local_path: str = typer.Argument(..., help="Local file path."),
-    remote_path: str = typer.Argument(..., help="Remote file path."),
+@app.command()
+def sftp(
+    server: str = typer.Option(..., help="SFTP server address."),
+    port: int = typer.Option(22, help="SFTP server port."),
+    username: str = typer.Option(..., help="SFTP username."),
+    password: str = typer.Option("", help="SFTP password."),
+    local_path: str = typer.Option(..., help="Local file path."),
+    remote_path: str = typer.Option(..., help="Remote file path on server."),
     upload: bool = typer.Option(
-        True, "--upload/--download", help="Upload or download?"
+        True, "--upload/--download", help="Upload (True) or download (False)."
     ),
 ):
-    """Transfer files via SFTP (secure) using Paramiko."""
-    typer.echo(
-        sftp_transfer(server, port, username, password, local_path, remote_path, upload)
+    """
+    SFTP transfer (upload or download).
+    """
+    result = sftp_transfer(
+        server, port, username, password, local_path, remote_path, upload
     )
+    rprint(_richify(result))
 
 
-@app.command("preview")
-def cmd_preview_file(
-    path: str = typer.Argument(..., help="Path to a text file."),
-    max_lines: int = typer.Option(
-        20, "--max-lines", "-m", help="Number of lines to preview."
-    ),
+@app.command()
+def preview(
+    path: str = typer.Argument(..., help="Path to file to preview."),
+    max_lines: int = typer.Option(20, "--max-lines", help="Max lines to read."),
 ):
-    """Show the first N lines of a text file."""
-    typer.echo(preview_file(path, max_lines))
+    """
+    Preview the first N lines of a text file.
+    """
+    result = preview_file(path, max_lines)
+    rprint(_richify(result))
 
 
-@app.command("search")
-def cmd_search_files(
+@app.command()
+def search(
     directory: str = typer.Argument(".", help="Directory to search."),
     pattern: str = typer.Argument("*.txt", help="Glob or regex pattern."),
     use_regex: bool = typer.Option(
-        False, "--regex", "-r", help="Treat pattern as a regex."
+        False, "--regex/--glob", help="Interpret 'pattern' as regex."
     ),
 ):
-    """Search for files using a glob or regex pattern."""
-    typer.echo(search_files(directory, pattern, use_regex))
+    """
+    Search for files by glob or regex pattern.
+    """
+    result = search_files(directory, pattern, use_regex)
+    rprint(_richify(result))
 
 
 ##############################################################################
-# 3. Optional Interactive Mode
+# 5. Main Entry
 ##############################################################################
-
-
-@app.command("interactive")
-def interactive():
-    """
-    Launch an interactive menu-driven CLI in the terminal.
-    Users can select operations step by step.
-    """
-    while True:
-        typer.echo("\n=== file-commander (Typer Edition) ===")
-        typer.echo("1. List directory contents")
-        typer.echo("2. Create file/folder")
-        typer.echo("3. Rename item(s)")
-        typer.echo("4. Delete item")
-        typer.echo("5. Move item")
-        typer.echo("6. Copy item")
-        typer.echo("7. Change permissions (chmod)")
-        typer.echo("8. Create link (symbolic/hard)")
-        typer.echo("9. Compress items (ZIP/TAR)")
-        typer.echo("10. Decompress archive (ZIP/TAR)")
-        typer.echo("11. Generate checksum (MD5/SHA1/SHA256)")
-        typer.echo("12. FTP transfer")
-        typer.echo("13. SFTP transfer")
-        typer.echo("14. Preview text file")
-        typer.echo("15. Search files")
-        typer.echo("0. Exit")
-
-        choice = typer.prompt("\nChoose an operation")
-
-        if choice == "1":
-            path = typer.prompt("Path to list", default=".")
-            detailed = typer.confirm("Detailed listing?", default=False)
-            tree = typer.confirm("Tree view?", default=False)
-            typer.echo(list_items(path, detailed, tree))
-
-        elif choice == "2":
-            item_type = typer.prompt("Item type (file/folder)", default="file")
-            path = typer.prompt("Path to create", default="./new_file.txt")
-            typer.echo(create_item(item_type, path))
-
-        elif choice == "3":
-            src = typer.prompt("Source path")
-            batch = typer.confirm("Batch rename using regex?", default=False)
-            if batch:
-                pattern = typer.prompt("Regex pattern")
-                replacement = typer.prompt("Replacement string", default="")
-                typer.echo(rename_item(src, pattern=pattern, replacement=replacement))
-            else:
-                dest = typer.prompt("Destination path")
-                typer.echo(rename_item(src, destination=dest))
-
-        elif choice == "4":
-            path = typer.prompt("Path to delete")
-            safe = typer.confirm("Safe delete (to trash)?", default=True)
-            typer.echo(delete_item(path, safe_delete=safe))
-
-        elif choice == "5":
-            src = typer.prompt("Source path")
-            dst = typer.prompt("Destination path")
-            typer.echo(move_item(src, dst))
-
-        elif choice == "6":
-            src = typer.prompt("Source path")
-            dst = typer.prompt("Destination path")
-            typer.echo(copy_item(src, dst))
-
-        elif choice == "7":
-            path = typer.prompt("Path")
-            mode_str = typer.prompt("Octal permission (e.g. 755)", default="755")
-            typer.echo(chmod_item(path, mode_str))
-
-        elif choice == "8":
-            target = typer.prompt("Target path")
-            link_name = typer.prompt("Link name/path")
-            hard = typer.confirm("Hard link?", default=False)
-            typer.echo(create_symlink(target, link_name, hard=hard))
-
-        elif choice == "9":
-            items_raw = typer.prompt("Items to compress (comma-separated)")
-            items = [item.strip() for item in items_raw.split(",") if item.strip()]
-            archive = typer.prompt(
-                "Output archive path (e.g. archive.zip)", default="archive.zip"
-            )
-            mode = typer.prompt("Mode (zip/tar)", default="zip")
-            typer.echo(compress_items(items, archive, mode))
-
-        elif choice == "10":
-            archive = typer.prompt("Archive path")
-            extract_to = typer.prompt("Extract to directory", default=".")
-            mode = typer.prompt("Mode (zip/tar)", default="zip")
-            typer.echo(decompress_item(archive, extract_to, mode))
-
-        elif choice == "11":
-            fpath = typer.prompt("File path")
-            algo = typer.prompt("Algorithm (md5/sha1/sha256)", default="md5")
-            typer.echo(generate_checksum(fpath, algo))
-
-        elif choice == "12":
-            server = typer.prompt("FTP server")
-            port = typer.prompt("FTP port", default="21")
-            username = typer.prompt("Username")
-            password = typer.prompt("Password", hide_input=True)
-            local = typer.prompt("Local file path")
-            remote = typer.prompt("Remote path")
-            up = typer.confirm("Upload?", default=True)
-            try:
-                port_int = int(port)
-            except ValueError:
-                port_int = 21
-            typer.echo(
-                ftp_transfer(server, port_int, username, password, local, remote, up)
-            )
-
-        elif choice == "13":
-            server = typer.prompt("SFTP server")
-            port = typer.prompt("SFTP port", default="22")
-            username = typer.prompt("Username")
-            password = typer.prompt("Password", hide_input=True)
-            local = typer.prompt("Local file path")
-            remote = typer.prompt("Remote path")
-            up = typer.confirm("Upload?", default=True)
-            try:
-                port_int = int(port)
-            except ValueError:
-                port_int = 22
-            typer.echo(
-                sftp_transfer(server, port_int, username, password, local, remote, up)
-            )
-
-        elif choice == "14":
-            fpath = typer.prompt("File path")
-            lines_str = typer.prompt("Max lines", default="20")
-            try:
-                max_lines = int(lines_str)
-            except ValueError:
-                max_lines = 20
-            typer.echo(preview_file(fpath, max_lines))
-
-        elif choice == "15":
-            directory = typer.prompt("Directory to search", default=".")
-            pattern = typer.prompt("Pattern (glob/regex)", default="*.txt")
-            regex = typer.confirm("Use regex?", default=False)
-            typer.echo(search_files(directory, pattern, regex))
-
-        elif choice == "0":
-            typer.echo("Exiting interactive mode.")
-            break
-
-        else:
-            typer.echo("Invalid choice. Please try again.")
-
-
-def main():
-    """
-    Entry point for file_commander_typer.py.
-    """
-    app()
-
 
 if __name__ == "__main__":
-    main()
+    # If no arguments were provided, Typer's callback will handle launching the TUI.
+    # Otherwise, it will proceed with the usual CLI subcommands.
+    app()

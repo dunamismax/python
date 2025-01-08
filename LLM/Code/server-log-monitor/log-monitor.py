@@ -1,36 +1,52 @@
 #!/usr/bin/env python3
 """
-Remote Server Log Viewer & Analyzer using Typer
+Remote Server Log Viewer & Analyzer using Typer and Curses
 
-This version removes the Textual TUI in favor of an interactive Typer CLI app.
-
-Features:
-- Prompts for SSH credentials (host, user, password, port, log file)
-- Asynchronous SSH log streaming using asyncssh
-- Real-time filtering by keyword (regex or plain text), severity, and date range
-- Color-coded severity levels (DEBUG, INFO, WARNING, ERROR, CRITICAL)
-- Highlighting of matched text (via ANSI escape sequences)
-- Interactive filter updates while logs are streaming
-
-Dependencies:
-    pip install asyncssh typer
-
-Usage:
-    python log-monitor.py monitor
+By default, if no arguments are passed, the TUI is launched.
+You can also explicitly run 'tui' or other subcommands (e.g., 'monitor').
 """
 
 import asyncio
+import curses
+import queue
 import re
+import threading
 import traceback
 from datetime import datetime
 from typing import Optional, List
 
 import asyncssh
 import typer
+from rich.console import Console
+from rich.theme import Theme
+from rich.text import Text
 
-app = typer.Typer()
+###############################################################################
+# Typer App Initialization
+###############################################################################
+app = typer.Typer(help="A tool to monitor remote logs via SSH with CLI or TUI modes.")
 
 
+###############################################################################
+# Rich Console Setup (for CLI mode)
+###############################################################################
+custom_theme = Theme(
+    {
+        "debug": "dim",
+        "info": "green",
+        "warning": "yellow",
+        "error": "red",
+        "critical": "bold red",
+        "keyword": "bold red",
+        "bold": "bold",
+    }
+)
+console = Console(theme=custom_theme)
+
+
+###############################################################################
+# SSHLogStreamer
+###############################################################################
 class SSHLogStreamer:
     """
     Helper class to establish SSH and stream logs via `tail -f`.
@@ -84,9 +100,12 @@ class SSHLogStreamer:
             pass
 
 
+###############################################################################
+# LogFilter
+###############################################################################
 class LogFilter:
     """
-    Handles filtering (keyword, severity, date range) and text highlighting.
+    Handles filtering (keyword, severity, date range) and line highlighting.
     """
 
     def __init__(
@@ -155,134 +174,64 @@ class LogFilter:
             # If we can’t parse a date, skip the filter
             return True
 
-    def highlight_line(self, line: str) -> str:
+    def highlight_line_rich(self, line: str) -> Text:
         """
-        Applies severity-based color and highlights keywords in red.
+        Converts the line into a Rich Text object with severity-based color
+        and highlights the keyword in bold red.
         """
-        severity_color = self._get_severity_color(line)
+        styled_line = Text(line)
 
-        # Optionally highlight the keyword
-        highlighted = (
-            self._highlight_keyword(line, self.keyword) if self.keyword else line
-        )
-
-        if severity_color:
-            # Wrap the entire line in the color
-            highlighted = f"{severity_color}{highlighted}\033[0m"
-        return highlighted
-
-    def _highlight_keyword(self, line: str, keyword: str) -> str:
-        """
-        Highlight matched keywords with ANSI escape sequences for red + bold.
-        """
-        try:
-            pattern = re.compile(f"({keyword})", re.IGNORECASE)
-            return pattern.sub(r"\033[1;31m\1\033[0m", line)
-        except re.error:
-            # If invalid regex, fallback to simple substring replace
-            return line.replace(keyword, f"\033[1;31m{keyword}\033[0m")
-
-    def _get_severity_color(self, line: str) -> str:
-        """
-        Return an ANSI escape code based on severity tokens in the line.
-        """
+        # Apply severity styles
         if "CRITICAL" in line:
-            return "\033[1;31m"  # Bold Red
+            styled_line.stylize("critical")
         elif "ERROR" in line:
-            return "\033[31m"  # Red
+            styled_line.stylize("error")
         elif "WARNING" in line:
-            return "\033[33m"  # Yellow
+            styled_line.stylize("warning")
         elif "INFO" in line:
-            return "\033[32m"  # Green
+            styled_line.stylize("info")
         elif "DEBUG" in line:
-            return "\033[2m"  # Dim
-        return ""
+            styled_line.stylize("debug")
+
+        # Highlight the keyword
+        if self.keyword:
+            try:
+                pattern = re.compile(self.keyword, re.IGNORECASE)
+                match_positions = []
+                for match in pattern.finditer(line):
+                    match_positions.append((match.start(), match.end()))
+                for start, end in reversed(match_positions):
+                    styled_line.stylize("keyword", start, end)
+            except re.error:
+                # If invalid regex, fallback to substring approach
+                substr = self.keyword
+                idx = line.lower().find(substr.lower())
+                while idx != -1:
+                    styled_line.stylize("keyword", idx, idx + len(substr))
+                    idx = line.lower().find(substr.lower(), idx + len(substr))
+        return styled_line
 
 
-async def _stream_logs_and_interact(
-    streamer: SSHLogStreamer,
-    initial_filter: LogFilter,
-):
-    """
-    - Opens the SSH connection, streams logs asynchronously.
-    - Concurrently listens for user commands to update filters.
-    - Prints logs that pass the active filters.
-    """
-    # Maintain a buffer of all incoming lines so we can re-print when filters change
-    lines_buffer: List[str] = []
-
-    current_filter = initial_filter
-
-    # Task that reads the logs
-    async def read_logs():
-        async for line in streamer.connect_and_stream_logs():
-            lines_buffer.append(line)
-            if current_filter.passes_filters(line):
-                typer.echo(current_filter.highlight_line(line))
-
-    # Task that interacts with user in the foreground
-    async def user_input_loop():
-        nonlocal current_filter
-
-        while True:
-            # Prompt user for possible commands
-            typer.echo("\nCommands: [f]ilter, [q]uit")
-            choice = await _async_input("Enter command: ").strip().lower()
-            if choice == "q":
-                # Quit
-                break
-            elif choice == "f":
-                # Prompt for new filter values
-                new_keyword = await _async_input("Keyword (regex or plain text): ")
-                new_severity = await _async_input(
-                    "Severity (DEBUG/INFO/WARNING/ERROR/CRITICAL): "
-                )
-                new_date_from = await _async_input("Date from (YYYY-MM-DD): ")
-                new_date_to = await _async_input("Date to (YYYY-MM-DD): ")
-
-                # Update current_filter
-                current_filter = LogFilter(
-                    keyword=new_keyword,
-                    severity=new_severity,
-                    date_from=new_date_from,
-                    date_to=new_date_to,
-                )
-
-                # Clear screen or do a separator
-                typer.echo(
-                    "\n--- Updating filters and re-displaying matching logs ---\n"
-                )
-
-                # Re-print all lines in the buffer that pass the new filter
-                for old_line in lines_buffer:
-                    if current_filter.passes_filters(old_line):
-                        typer.echo(current_filter.highlight_line(old_line))
-            else:
-                typer.echo("Unknown command. Please enter 'f' or 'q'.")
-
-        # After user decides to quit, we can exit
-        typer.echo("\nShutting down log streaming...")
-        await streamer.close()
-
-    # Start both tasks concurrently
-    await asyncio.gather(read_logs(), user_input_loop())
-
-
+###############################################################################
+# ASYNC INPUT HELPER (for CLI monitor)
+###############################################################################
 async def _async_input(prompt: str = "") -> str:
     """
     A helper to prompt the user for input in an async context without blocking.
     """
-    # Print the prompt, then read from stdin in a thread pool
-    typer.echo(prompt, nl=False)
+    console.print(prompt, end="", style="bold")
     loop = asyncio.get_event_loop()
     return await loop.run_in_executor(None, input)
 
 
+###############################################################################
+# MONITOR COMMAND (CLI MODE)
+###############################################################################
 @app.command()
 def monitor():
     """
     Prompt for SSH credentials and log filter parameters, then start streaming logs.
-    You can interactively change filters or quit at any time.
+    Real-time interactive filter updates (f) or quit (q).
     """
     host = typer.prompt("Host (Hostname or IP)")
     user = typer.prompt("Username")
@@ -295,7 +244,7 @@ def monitor():
     except ValueError:
         port = 22
 
-    typer.echo("--- Optional Initial Filters ---")
+    console.print("[bold]\n--- Optional Initial Filters ---[/bold]")
     keyword = typer.prompt("Keyword (regex or plain text)", default="")
     severity = typer.prompt("Severity (DEBUG/INFO/WARNING/ERROR/CRITICAL)", default="")
     date_from = typer.prompt("Date from (YYYY-MM-DD)", default="")
@@ -316,13 +265,296 @@ def monitor():
         date_to=date_to,
     )
 
-    # Start the asyncio event loop
+    lines_buffer: List[str] = []
+
+    async def read_logs():
+        async for line in streamer.connect_and_stream_logs():
+            lines_buffer.append(line)
+            if log_filter.passes_filters(line):
+                console.print(log_filter.highlight_line_rich(line))
+
+    async def user_input_loop():
+        nonlocal log_filter
+
+        while True:
+            console.print("\nCommands: [bold][f][/bold]ilter, [bold][q][/bold]uit")
+            choice = (await _async_input("Enter command: ")).strip().lower()
+
+            if choice == "q":
+                break
+            elif choice == "f":
+                new_keyword = await _async_input("Keyword (regex or plain text): ")
+                new_severity = await _async_input(
+                    "Severity (DEBUG/INFO/WARNING/ERROR/CRITICAL): "
+                )
+                new_date_from = await _async_input("Date from (YYYY-MM-DD): ")
+                new_date_to = await _async_input("Date to (YYYY-MM-DD): ")
+
+                log_filter = LogFilter(
+                    keyword=new_keyword,
+                    severity=new_severity,
+                    date_from=new_date_from,
+                    date_to=new_date_to,
+                )
+
+                console.print("[bold]\n--- Updating filters ---[/bold]")
+                console.print("[bold]--- Matching logs ---[/bold]\n")
+                for old_line in lines_buffer:
+                    if log_filter.passes_filters(old_line):
+                        console.print(log_filter.highlight_line_rich(old_line))
+            else:
+                console.print("Unknown command. Please enter 'f' or 'q'.")
+
+        console.print("\n[bold]Shutting down log streaming...[/bold]")
+        await streamer.close()
+
+    async def main_loop():
+        await asyncio.gather(read_logs(), user_input_loop())
+
     try:
-        asyncio.run(_stream_logs_and_interact(streamer, log_filter))
+        asyncio.run(main_loop())
     except KeyboardInterrupt:
-        typer.echo("\nKeyboard interrupt detected. Closing connection...")
+        console.print(
+            "[bold red]\nKeyboard interrupt detected. Closing connection...[/bold red]"
+        )
         asyncio.run(streamer.close())
 
 
+###############################################################################
+# TUI COMMAND (Curses Mode)
+###############################################################################
+@app.command()
+def tui():
+    """
+    Launch a curses-based TUI to view and filter logs in real time.
+    Press 'f' to update filters, 'q' to quit.
+    """
+    host = typer.prompt("Host (Hostname or IP)")
+    user = typer.prompt("Username")
+    password = typer.prompt("Password", hide_input=True)
+    port_str = typer.prompt("Port", default="22")
+    logfile = typer.prompt("Log file", default="/var/log/syslog")
+
+    try:
+        port = int(port_str)
+    except ValueError:
+        port = 22
+
+    typer.echo("\n--- Optional Initial Filters ---")
+    keyword = typer.prompt("Keyword (regex or plain text)", default="")
+    severity = typer.prompt("Severity (DEBUG/INFO/WARNING/ERROR/CRITICAL)", default="")
+    date_from = typer.prompt("Date from (YYYY-MM-DD)", default="")
+    date_to = typer.prompt("Date to (YYYY-MM-DD)", default="")
+
+    streamer = SSHLogStreamer(
+        host=host,
+        username=user,
+        password=password,
+        port=port,
+        log_file=logfile,
+    )
+    log_filter = LogFilter(
+        keyword=keyword,
+        severity=severity,
+        date_from=date_from,
+        date_to=date_to,
+    )
+
+    # Thread-safe queue to receive lines from asyncio
+    log_queue = queue.Queue()
+    lines_buffer: List[str] = []
+    stop_event = threading.Event()  # to signal the streaming thread to stop
+
+    # ----------------------------
+    # 1) Async log fetcher thread
+    # ----------------------------
+    def start_asyncio_loop_in_thread():
+        async def fetch_logs():
+            async for line in streamer.connect_and_stream_logs():
+                log_queue.put(line)
+            # If the streamer finishes or fails, put None
+            log_queue.put(None)
+
+        async def main_loop():
+            await fetch_logs()
+
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            loop.run_until_complete(main_loop())
+        except Exception as e:
+            log_queue.put(f"ERROR: {e}")
+        finally:
+            loop.run_until_complete(streamer.close())
+            loop.close()
+
+    reader_thread = threading.Thread(target=start_asyncio_loop_in_thread, daemon=True)
+    reader_thread.start()
+
+    # ----------------------------
+    # 2) Curses UI
+    # ----------------------------
+    def curses_main(stdscr):
+        curses.curs_set(0)  # Hide cursor
+        stdscr.nodelay(True)  # Non-blocking input
+
+        max_y, max_x = stdscr.getmaxyx()
+        log_win = curses.newwin(max_y - 1, max_x, 0, 0)
+        status_win = curses.newwin(1, max_x, max_y - 1, 0)
+
+        scroll_pos = 0
+        while not stop_event.is_set():
+            # Receive new lines from queue
+            try:
+                while True:
+                    line = log_queue.get_nowait()
+                    if line is None:
+                        stop_event.set()
+                        break
+                    lines_buffer.append(line)
+            except queue.Empty:
+                pass
+
+            # Clear the log window
+            log_win.erase()
+
+            height = max_y - 1
+            visible_lines = lines_buffer[
+                -(height + scroll_pos) : len(lines_buffer) - scroll_pos
+            ]
+
+            row = 0
+            for ln in visible_lines:
+                if log_filter.passes_filters(ln):
+                    text_str = format_for_curses(log_filter, ln, max_x)
+                    log_win.addstr(row, 0, text_str)
+                    row += 1
+                    if row >= height:
+                        break
+
+            log_win.refresh()
+
+            status_win.erase()
+            status_msg = (
+                "[q] Quit  |  [f] Filter  |  Use Up/Down to scroll\n"
+                f"Filters: keyword={log_filter.keyword}, severity={log_filter.severity},"
+                f" date_from={log_filter.date_from}, date_to={log_filter.date_to}"
+            )
+            status_win.addstr(0, 0, status_msg[: max_x - 1])
+            status_win.refresh()
+
+            # Handle user input
+            try:
+                ch = stdscr.getch()
+                if ch == curses.KEY_UP:
+                    if scroll_pos < len(lines_buffer):
+                        scroll_pos += 1
+                elif ch == curses.KEY_DOWN:
+                    if scroll_pos > 0:
+                        scroll_pos -= 1
+                elif ch in [ord("q"), ord("Q")]:
+                    stop_event.set()
+                elif ch in [ord("f"), ord("F")]:
+                    update_filters_curses(stdscr, log_filter)
+                    scroll_pos = 0
+            except:
+                pass
+
+            curses.napms(100)  # Sleep 100ms to reduce CPU usage
+
+    def format_for_curses(log_filter_obj: LogFilter, line: str, max_width: int) -> str:
+        """
+        Convert the line into a curses-friendly color-coded string (simple approach).
+        """
+        prefix = ""
+        if "CRITICAL" in line:
+            prefix = "[CRITICAL] "
+        elif "ERROR" in line:
+            prefix = "[ERROR] "
+        elif "WARNING" in line:
+            prefix = "[WARNING] "
+        elif "INFO" in line:
+            prefix = "[INFO] "
+        elif "DEBUG" in line:
+            prefix = "[DEBUG] "
+
+        highlighted_line = line
+        if log_filter_obj.keyword:
+            try:
+                pattern = re.compile(log_filter_obj.keyword, re.IGNORECASE)
+                highlighted_line = pattern.sub(r"<<\1>>", line)
+            except re.error:
+                substr = log_filter_obj.keyword
+                highlighted_line = line.replace(substr, f"<<{substr}>>")
+
+        display_str = prefix + highlighted_line
+        if len(display_str) > max_width:
+            display_str = display_str[: max_width - 1]
+        return display_str
+
+    def update_filters_curses(stdscr, log_filter_obj: LogFilter):
+        curses.echo()
+        max_y, max_x = stdscr.getmaxyx()
+        popup_height = 7
+        popup_width = max_x - 4
+        start_y = (max_y - popup_height) // 2
+        start_x = (max_x - popup_width) // 2
+
+        popup = curses.newwin(popup_height, popup_width, start_y, start_x)
+        popup.border()
+        popup.addstr(1, 2, "Update Filters (leave blank to keep current)")
+        popup.refresh()
+
+        def prompt_line(row, label, current_value):
+            popup.addstr(row, 2, f"{label} (current: {current_value}): ")
+            popup.clrtoeol()
+            popup.refresh()
+            val = popup.getstr(
+                row, len(label) + len(" (current: )") + 3 + len(str(current_value))
+            )
+            return val.decode("utf-8").strip()
+
+        new_keyword = prompt_line(2, "Keyword", log_filter_obj.keyword)
+        new_severity = prompt_line(3, "Severity", log_filter_obj.severity)
+        new_date_from = prompt_line(4, "Date from YYYY-MM-DD", log_filter_obj.date_from)
+        new_date_to = prompt_line(5, "Date to YYYY-MM-DD", log_filter_obj.date_to)
+
+        if new_keyword:
+            log_filter_obj.keyword = new_keyword
+        if new_severity:
+            log_filter_obj.severity = new_severity.upper().strip()
+        if new_date_from:
+            log_filter_obj.date_from = new_date_from.strip()
+        if new_date_to:
+            log_filter_obj.date_to = new_date_to.strip()
+
+        curses.noecho()
+        popup.clear()
+        popup.refresh()
+        del popup
+
+    curses.wrapper(curses_main)
+    stop_event.set()
+    reader_thread.join()
+
+
+###############################################################################
+# DEFAULT BEHAVIOR: If no subcommand is provided, launch TUI
+###############################################################################
+@app.callback(invoke_without_command=True)
+def main_callback(ctx: typer.Context):
+    """
+    By default (no arguments passed), launch TUI.
+    Otherwise, run the requested subcommand (e.g., 'monitor').
+    """
+    if ctx.invoked_subcommand is None:
+        # No subcommand means user just ran "python log-monitor.py"
+        ctx.invoke(tui)
+        raise typer.Exit()
+
+
+###############################################################################
+# MAIN
+###############################################################################
 if __name__ == "__main__":
     app()

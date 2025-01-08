@@ -4,174 +4,238 @@ py-top: An interactive CLI app using Typer that runs a Textual-based TUI
 for displaying real-time CPU, memory, and process usage.
 
 Usage:
-  python py-top.py run-tui
-
-Optional arguments:
-  --refresh-interval FLOAT  Seconds between screen updates (default: 1.0)
+  python py-top.py
 
 Press 'q' or 'Ctrl+C' to exit the TUI.
 """
 
-import asyncio
+import curses
+import time
 import psutil
 import typer
+from typing import Any, List
 
-from textual.app import App, ComposeResult
-from textual.containers import Vertical, Horizontal, ScrollableContainer
-from textual.reactive import reactive
-from textual.widgets import Static, DataTable, Header, Footer, ProgressBar
-
-app = typer.Typer(help="A Typer-based CLI for an interactive Textual TUI.")
+app = typer.Typer(help="A Typer-based CLI for an interactive curses TUI.")
 
 
-class SystemStats(Static):
+def draw_usage_bar(
+    stdscr: "curses._CursesWindow",
+    start_y: int,
+    label: str,
+    usage_percent: float,
+    width: int,
+    color_pair: int,
+) -> None:
     """
-    A widget displaying system-wide CPU and memory usage as progress bars.
+    Draw a labeled bar to indicate a usage percentage (e.g., CPU or memory).
+
+    :param stdscr: The curses screen.
+    :param start_y: The Y-coordinate to start drawing.
+    :param label: The label to print before the usage bar (e.g., "CPU", "MEM").
+    :param usage_percent: The usage percentage to visualize (0-100).
+    :param width: The total width for the bar.
+    :param color_pair: A curses color pair to use for the filled portion.
     """
+    # Clamp usage to [0, 100]
+    usage = max(0.0, min(usage_percent, 100.0))
+    # Format label
+    label_str = f"{label}: {usage:.1f}%"
+    stdscr.addstr(start_y, 0, label_str)
 
-    cpu_usage: reactive[float] = reactive(0.0)
-    mem_usage: reactive[float] = reactive(0.0)
+    # Calculate bar fill
+    bar_fill = int((usage / 100.0) * width)
+    bar_str = "[" + "#" * bar_fill + "-" * (width - bar_fill) + "]"
+    # Color only the "#" region if colors are available
+    if curses.has_colors():
+        # Print the opening bracket
+        stdscr.addstr(start_y, len(label_str) + 1, "[", curses.color_pair(0))
+        # Print the filled portion
+        stdscr.addstr(
+            start_y, len(label_str) + 2, "#" * bar_fill, curses.color_pair(color_pair)
+        )
+        # Print the unfilled portion
+        stdscr.addstr(
+            start_y,
+            len(label_str) + 2 + bar_fill,
+            "-" * (width - bar_fill),
+            curses.color_pair(0),
+        )
+        # Print the closing bracket
+        stdscr.addstr(start_y, len(label_str) + 2 + width, "]", curses.color_pair(0))
+    else:
+        stdscr.addstr(start_y, len(label_str) + 1, bar_str)
 
-    def compose(self) -> ComposeResult:
-        """Compose the child widgets (two progress bars)."""
-        with Vertical():
-            yield ProgressBar(total=100, show_percentage=True, id="cpu_bar")
-            yield ProgressBar(total=100, show_percentage=True, id="mem_bar")
 
-    def watch_cpu_usage(self, usage: float) -> None:
-        """Called automatically when cpu_usage is updated."""
-        cpu_bar = self.query_one("#cpu_bar", ProgressBar)
-        cpu_bar.update(int(usage))
-
-    def watch_mem_usage(self, usage: float) -> None:
-        """Called automatically when mem_usage is updated."""
-        mem_bar = self.query_one("#mem_bar", ProgressBar)
-        mem_bar.update(int(usage))
-
-
-class ProcessTable(DataTable):
+def draw_process_list(
+    process_pad: "curses._CursesWindow",
+    procs: List[Any],
+    max_y: int,
+    max_x: int,
+    highlight_line: int,
+    pad_y_offset: int,
+) -> None:
     """
-    A table widget that displays processes in descending order by CPU usage.
+    Render the process list inside a pad, which allows scrolling.
+
+    :param process_pad: The curses pad to draw the process table.
+    :param procs: A list of processes (dicts) sorted by CPU usage.
+    :param max_y: The maximum visible height for the process area.
+    :param max_x: The maximum visible width for the process area.
+    :param highlight_line: The current highlight line offset (for scrolling).
+    :param pad_y_offset: The vertical offset into the pad (topmost visible row).
     """
+    # Clear the pad before drawing
+    process_pad.erase()
 
-    async def on_mount(self) -> None:
-        """
-        Set up the table columns after mounting.
-        """
-        self.show_header = True
-        self.show_footer = False
-        self.zebra_stripes = True
+    # Table header
+    header = f"{'PID':<8}{'USER':<16}{'NAME':<25}{'CPU%':>8}{'MEM%':>8}"
+    process_pad.addstr(0, 0, header, curses.A_BOLD)
 
-        self.add_column("PID", width=8)
-        self.add_column("USER", width=16)
-        self.add_column("NAME", width=25)
-        self.add_column("CPU%", width=8, justify="right")
-        self.add_column("MEM%", width=8, justify="right")
+    for i, proc in enumerate(procs, start=1):
+        # Truncate or fill columns
+        pid_str = f"{proc['pid']:<8}"
+        user_str = f"{(proc['username'] or '-')[:15]:<16}"
+        name_str = f"{(proc['name'] or '-')[:25]:<25}"
+        cpu_str = f"{proc['cpu_percent']:.1f}".rjust(8)
+        mem_str = f"{proc['memory_percent']:.1f}".rjust(8)
 
-    def update_process_data(self, procs: list) -> None:
-        """
-        Clear the table and re-populate with new process information.
-        """
-        self.clear(rows=True)
-        for proc in procs:
-            self.add_row(
-                str(proc["pid"]),
-                proc["username"][:15] if proc["username"] else "-",
-                proc["name"][:25] if proc["name"] else "-",
-                f"{proc['cpu_percent']:.1f}",
-                f"{proc['memory_percent']:.1f}",
+        line_str = f"{pid_str}{user_str}{name_str}{cpu_str}{mem_str}"
+
+        process_pad.addstr(i, 0, line_str)
+
+    # Refresh the pad to the screen in a scrollable manner
+    # +1 because we used row 0 for the header.
+    total_rows = len(procs) + 1
+    process_pad.noutrefresh(
+        pad_y_offset,
+        0,
+        highlight_line,
+        0,
+        max_y - 1,
+        max_x - 1,
+    )
+
+
+def gather_processes() -> List[dict]:
+    """
+    Gather processes, sorted by CPU usage descending.
+
+    :return: A list of process info dictionaries.
+    """
+    processes = []
+    for proc in psutil.process_iter(
+        ["pid", "name", "username", "cpu_percent", "memory_percent"]
+    ):
+        try:
+            processes.append(proc.info)
+        except (psutil.NoSuchProcess, psutil.AccessDenied):
+            continue
+    processes.sort(key=lambda x: x["cpu_percent"], reverse=True)
+    return processes
+
+
+def curses_app(stdscr: "curses._CursesWindow", refresh_interval: float) -> None:
+    """
+    Main curses application loop.
+
+    :param stdscr: The main curses window.
+    :param refresh_interval: Seconds between data refreshes.
+    """
+    # Curses setup
+    curses.curs_set(0)
+    stdscr.nodelay(True)  # Non-blocking input
+    stdscr.timeout(0)  # getch() returns immediately
+    curses.noecho()
+    curses.cbreak()
+
+    # Optional color setup
+    if curses.has_colors():
+        curses.start_color()
+        # We can define multiple color pairs if desired
+        curses.init_pair(1, curses.COLOR_WHITE, curses.COLOR_BLUE)
+        curses.init_pair(2, curses.COLOR_WHITE, curses.COLOR_RED)
+        # Pair 0 is default (foreground, background)
+
+    # Create a pad for the process list, which might be tall
+    # Enough rows to potentially accommodate many processes
+    max_process_rows = 10_000  # Arbitrary large number
+    max_process_cols = curses.COLS
+    process_pad = curses.newpad(max_process_rows, max_process_cols)
+
+    pad_y_offset = 0  # Tracks the top row displayed in the pad
+    highlight_line = 4  # Where we want to place the pad (below CPU/MEM usage lines)
+
+    # Main loop
+    try:
+        while True:
+            stdscr.erase()
+            height, width = stdscr.getmaxyx()
+
+            # Gather stats
+            cpu_percent = psutil.cpu_percent(interval=None)
+            mem_info = psutil.virtual_memory()
+            processes = gather_processes()
+
+            # Draw CPU & MEM usage bars
+            draw_usage_bar(stdscr, 0, "CPU", cpu_percent, width // 4, 1)
+            draw_usage_bar(stdscr, 1, "MEM", mem_info.percent, width // 4, 2)
+
+            # Draw instructions
+            instr = "[q] Quit | Up/Down arrows: Scroll processes"
+            stdscr.addstr(2, 0, instr, curses.A_DIM)
+
+            # Draw process list in a pad
+            draw_process_list(
+                process_pad=process_pad,
+                procs=processes,
+                max_y=height - highlight_line,
+                max_x=width,
+                highlight_line=highlight_line,
+                pad_y_offset=pad_y_offset,
             )
 
+            # Handle user input
+            key = stdscr.getch()
+            if key == ord("q") or key == ord("Q"):
+                break
+            elif key == curses.KEY_DOWN:
+                # Scroll down (move the pad start row down)
+                pad_y_offset = min(pad_y_offset + 1, len(processes))
+            elif key == curses.KEY_UP:
+                # Scroll up
+                pad_y_offset = max(pad_y_offset - 1, 0)
+            elif key == curses.ERR:
+                # No key pressed
+                pass
 
-class PyTop(App):
-    """
-    Main Textual Application for monitoring system stats and processes.
-    """
+            # Update the screen
+            curses.doupdate()
 
-    CSS = """
-    Screen {
-        layout: vertical;
-    }
-    #top_container {
-        dock: top;
-        height: 5;
-    }
-    #process_container {
-        dock: fill;
-    }
-    """
+            # Sleep for refresh_interval seconds
+            # We can use time.sleep or curses.napms
+            # Using time.sleep is simpler for Pythonic code
+            time.sleep(refresh_interval)
 
-    BINDINGS = [("q", "quit", "Quit the application")]
-
-    def __init__(self, refresh_interval: float = 1.0) -> None:
-        """
-        Initialize the PyTop application.
-
-        Args:
-            refresh_interval (float): Seconds between data refreshes.
-        """
-        super().__init__()
-        self.refresh_interval = refresh_interval
-
-    def compose(self) -> ComposeResult:
-        """
-        Compose the layout:
-        A header at the top, system stats right below,
-        and a scrollable container with a process table at the bottom.
-        A footer is docked at the bottom for help text.
-        """
-        yield Header(show_clock=True)
-        with Horizontal(id="top_container"):
-            yield SystemStats()
-        with ScrollableContainer(id="process_container"):
-            yield ProcessTable()
-        yield Footer()
-
-    async def on_mount(self) -> None:
-        """
-        Called when the app is first mounted.
-        We schedule the auto-refresh task here.
-        """
-        self.system_stats = self.query_one(SystemStats)
-        self.process_table = self.query_one(ProcessTable)
-        self.set_interval(self.refresh_interval, self.refresh_data)
-
-    def refresh_data(self) -> None:
-        """
-        Fetch latest CPU, Memory, and Process stats; update widgets.
-        """
-        cpu_percent = psutil.cpu_percent(interval=None)
-        mem_info = psutil.virtual_memory()
-
-        self.system_stats.cpu_usage = cpu_percent
-        self.system_stats.mem_usage = mem_info.percent
-
-        # Gather processes, sorted by CPU usage
-        processes = []
-        for proc in psutil.process_iter(
-            ["pid", "name", "username", "cpu_percent", "memory_percent"]
-        ):
-            try:
-                processes.append(proc.info)
-            except (psutil.NoSuchProcess, psutil.AccessDenied):
-                continue
-
-        processes.sort(key=lambda x: x["cpu_percent"], reverse=True)
-        self.process_table.update_process_data(processes)
-
-    def action_quit(self) -> None:
-        """Action for the 'q' binding. Exits the application cleanly."""
-        self.exit()
+    except KeyboardInterrupt:
+        # Graceful exit on Ctrl+C
+        pass
+    finally:
+        # Restore terminal settings
+        curses.nocbreak()
+        stdscr.keypad(False)
+        curses.echo()
+        curses.endwin()
 
 
 @app.command()
 def run_tui(
-    refresh_interval: float = typer.Option(1.0, help="Seconds between screen updates")
+    refresh_interval: float = typer.Option(1.0, help="Seconds between screen updates."),
 ):
     """
-    Start the Textual TUI for real-time system monitoring.
+    Start the curses-based TUI for real-time system monitoring.
+    Press 'q' or Ctrl+C to exit.
     """
-    asyncio.run(PyTop(refresh_interval=refresh_interval).run())
+    curses.wrapper(curses_app, refresh_interval)
 
 
 if __name__ == "__main__":
