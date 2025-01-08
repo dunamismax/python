@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-secure-notes.py
+secure_notes.py
 ---------------
 A production-ready encrypted notes application in Python using Typer (for CLI),
 Rich (for styled console output), and curses (for interactive TUI).
@@ -15,19 +15,19 @@ Features:
 
 Usage:
     # Basic CLI usage (lists notes)
-    python secure-notes.py list
+    python secure_notes.py list
 
     # Create a new note
-    python secure-notes.py create --title "My Title" --content "Hello world!"
+    python secure_notes.py create --title "My Title" --content "Hello world!"
 
     # View an existing note (by index)
-    python secure-notes.py view 0
+    python secure_notes.py view 0
 
     # Edit a note
-    python secure-notes.py edit 0 --new-title "Updated Title"
+    python secure_notes.py edit 0 --new-title "Updated Title"
 
     # Launch the curses TUI (also the default if no arguments provided)
-    python secure-notes.py tui
+    python secure_notes.py tui
 """
 
 import os

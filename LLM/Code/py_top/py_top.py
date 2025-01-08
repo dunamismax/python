@@ -1,10 +1,10 @@
 #!/usr/bin/env python3
 """
-py-top: An interactive CLI app using Typer that runs a Textual-based TUI
+py_top: An interactive CLI app using Typer that runs a Textual-based TUI
 for displaying real-time CPU, memory, and process usage.
 
 Usage:
-  python py-top.py
+  python py_top.py
 
 Press 'q' or 'Ctrl+C' to exit the TUI.
 """

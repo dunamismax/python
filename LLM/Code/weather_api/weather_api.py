@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-weather-api.py
+weather_api.py
 
 An interactive CLI/TUI application (Typer + Curses + Rich) that fetches
 current weather data from OpenWeatherMap, leveraging an API key stored
@@ -10,6 +10,9 @@ Features:
     1. Default to TUI if no subcommand is given.
     2. `tui` subcommand explicitly launches curses-based TUI.
     3. `get-weather` subcommand for CLI usage with Rich formatting.
+
+Press 'g' in TUI to enter city/zip; press Enter to fetch weather.
+Press 'q' to quit TUI.
 
 Requirements:
     - Python 3.8+
@@ -23,10 +26,10 @@ import curses
 import requests
 import typer
 
+from datetime import datetime
 from typing import Any, Dict
 from dotenv import load_dotenv
 from rich.console import Console
-from rich import print as rprint
 
 ###############################################################################
 # Load Environment & Setup Constants
@@ -47,10 +50,7 @@ BASE_URL = "https://api.openweathermap.org/data/2.5/weather"
 # Typer & Rich Setup
 ###############################################################################
 
-# Typer app for CLI commands
 app = typer.Typer(help="A CLI/TUI to fetch and display weather information.")
-
-# Rich console for CLI mode output
 console = Console()
 
 ###############################################################################
@@ -58,26 +58,28 @@ console = Console()
 ###############################################################################
 
 
-def fetch_weather(city: str, api_key: str) -> Dict[str, Any]:
+def fetch_weather(location: str, api_key: str) -> Dict[str, Any]:
     """
-    Fetch current weather data for a given city from OpenWeatherMap.
+    Fetch current weather data from OpenWeatherMap using either city name
+    or ZIP code. Zip codes default to US (e.g. 33948,us).
+    """
+    if location.isdigit():
+        params = {
+            "zip": f"{location},us",
+            "appid": api_key,
+            "units": "imperial",  # Use imperial units (F, mph)
+        }
+    else:
+        params = {
+            "q": location,
+            "appid": api_key,
+            "units": "imperial",  # Use imperial units (F, mph)
+        }
 
-    :param city: Name of the city to fetch the weather for.
-    :param api_key: Your OpenWeatherMap API key.
-    :return: A dictionary containing weather information.
-    :raises requests.RequestException: For any network-related errors.
-    :raises ValueError: If the response data is missing expected fields.
-    """
-    params = {
-        "q": city,
-        "appid": api_key,
-        "units": "metric",  # Use "imperial" for Fahrenheit
-    }
     response = requests.get(BASE_URL, params=params, timeout=10)
     response.raise_for_status()
     data = response.json()
 
-    # Basic validation to ensure required fields exist
     if "main" not in data or "weather" not in data:
         raise ValueError("Unexpected response format from OpenWeatherMap API.")
 
@@ -86,28 +88,71 @@ def fetch_weather(city: str, api_key: str) -> Dict[str, Any]:
 
 def format_weather_output(data: Dict[str, Any]) -> str:
     """
-    Format the JSON response from OpenWeatherMap into a user-friendly string.
-
-    :param data: Parsed JSON dictionary from the API response.
-    :return: A formatted string of weather information.
+    Format the JSON response from OpenWeatherMap into a Rich-friendly string
+    for CLI usage or for TUI display (after removing Rich tags).
     """
     city_name = data.get("name", "Unknown City")
     main_info = data.get("main", {})
     weather_info = data.get("weather", [{}])[0]
+    wind_info = data.get("wind", {})
+    sys_info = data.get("sys", {})
 
+    # Main weather data
     temp = main_info.get("temp", "N/A")
     feels_like = main_info.get("feels_like", "N/A")
+    temp_min = main_info.get("temp_min", "N/A")
+    temp_max = main_info.get("temp_max", "N/A")
+    pressure = main_info.get("pressure", "N/A")
     humidity = main_info.get("humidity", "N/A")
-    description = weather_info.get("description", "N/A").title()
 
+    # Description and wind
+    description = weather_info.get("description", "N/A").title()
+    wind_speed = wind_info.get("speed", "N/A")  # mph
+    wind_gust = wind_info.get("gust", "N/A")
+
+    # Visibility (convert meters to miles if available)
+    visibility_meters = data.get("visibility", "N/A")
+    if visibility_meters != "N/A":
+        visibility_miles = round(visibility_meters / 1609.34, 2)
+    else:
+        visibility_miles = "N/A"
+
+    # Cloudiness
+    cloudiness = data.get("clouds", {}).get("all", "N/A")
+
+    # Convert sunrise/sunset from UNIX to local time
+    sunrise_unix = sys_info.get("sunrise")
+    sunset_unix = sys_info.get("sunset")
+    timezone_offset = data.get("timezone", 0)
+    sunrise_str = _format_unix_time(sunrise_unix, timezone_offset)
+    sunset_str = _format_unix_time(sunset_unix, timezone_offset)
+
+    # Build Rich output
     output = (
-        f"[bold white]City:[/bold white] {city_name}\n"
-        f"[bold white]Temperature:[/bold white] {temp} °C\n"
-        f"[bold white]Feels Like:[/bold white] {feels_like} °C\n"
+        f"[bold magenta]City:[/bold magenta] [yellow]{city_name}[/yellow]\n"
+        f"[bold white]Temperature:[/bold white] {temp} °F\n"
+        f"[bold white]Feels Like:[/bold white] {feels_like} °F\n"
+        f"[bold white]Min Temp:[/bold white] {temp_min} °F\n"
+        f"[bold white]Max Temp:[/bold white] {temp_max} °F\n"
+        f"[bold white]Pressure:[/bold white] {pressure} hPa\n"
         f"[bold white]Humidity:[/bold white] {humidity}%\n"
-        f"[bold white]Condition:[/bold white] {description}"
+        f"[bold white]Condition:[/bold white] {description}\n"
+        f"[bold white]Wind Speed:[/bold white] {wind_speed} mph\n"
+        f"[bold white]Wind Gust:[/bold white] {wind_gust if wind_gust != 'N/A' else 'N/A'} mph\n"
+        f"[bold white]Visibility:[/bold white] {visibility_miles} miles\n"
+        f"[bold white]Cloudiness:[/bold white] {cloudiness}%\n"
+        f"[bold white]Sunrise:[/bold white] {sunrise_str}\n"
+        f"[bold white]Sunset:[/bold white] {sunset_str}"
     )
     return output
+
+
+def _format_unix_time(unix_time: Any, timezone_offset: int) -> str:
+    if not unix_time:
+        return "N/A"
+    local_ts = unix_time + timezone_offset
+    local_time = datetime.utcfromtimestamp(local_ts)
+    return local_time.strftime("%Y-%m-%d %H:%M:%S")
 
 
 ###############################################################################
@@ -117,27 +162,27 @@ def format_weather_output(data: Dict[str, Any]) -> str:
 
 @app.command("get-weather")
 def get_weather(
-    city: str = typer.Option(
+    location: str = typer.Option(
         None,
-        "--city",
-        "-c",
-        help="City name to fetch weather for. If omitted, a prompt appears.",
-        prompt="Please enter a city name",
+        "--location",
+        "-l",
+        help="City name or ZIP code to fetch weather for. If omitted, a prompt appears.",
+        prompt="Please enter a city name or zip code",
     )
 ) -> None:
     """
-    Fetch and display current weather information for a specified city.
+    Fetch and display current weather information for a specified location
+    (either a city or a zip code).
     """
     try:
-        weather_data = fetch_weather(city, API_KEY)
-        # Print using Rich to provide colorful, formatted output
-        console.print(format_weather_output(weather_data), style="green")
+        weather_data = fetch_weather(location, API_KEY)
+        console.print(format_weather_output(weather_data))
     except requests.RequestException as req_exc:
-        console.print(f"[red]Network error:[/red] {req_exc}", style="red")
+        console.print(f"[red]Network error:[/red] {req_exc}")
     except ValueError as val_exc:
-        console.print(f"[red]Data error:[/red] {val_exc}", style="red")
+        console.print(f"[red]Data error:[/red] {val_exc}")
     except Exception as exc:
-        console.print(f"[red]Unexpected error:[/red] {exc}", style="red")
+        console.print(f"[red]Unexpected error:[/red] {exc}")
 
 
 @app.command("tui")
@@ -155,36 +200,38 @@ def launch_tui() -> None:
 
 def run_tui(stdscr: "curses._CursesWindow") -> None:
     """
-    The main TUI function that initializes curses settings, handles user input,
-    and updates the screen to fetch/display weather data in an interactive way.
+    The main TUI function: initializes curses, handles user input, and
+    fetches/displays weather data.
     """
-
-    # Basic curses setup
-    curses.curs_set(0)  # Hide cursor
+    curses.curs_set(0)
     curses.start_color()
     curses.init_pair(1, curses.COLOR_CYAN, curses.COLOR_BLACK)
     curses.init_pair(2, curses.COLOR_YELLOW, curses.COLOR_BLACK)
     curses.init_pair(3, curses.COLOR_RED, curses.COLOR_BLACK)
 
-    # Main loop instructions
-    instructions = "Weather TUI Controls:\n" " [g] to GET weather\n" " [q] to QUIT"
+    instructions = (
+        "Weather TUI Controls:\n"
+        " [g] to GET weather (enter city or zip)\n"
+        " [q] to QUIT"
+    )
 
-    def refresh_screen(selected_city: str = "", weather_output: str = ""):
-        """Clear and redraw the screen with updated content."""
+    def refresh_screen(selected_location: str = "", weather_output: str = ""):
         stdscr.clear()
-        # Title
         title = "Weather TUI"
         stdscr.addstr(0, 2, title, curses.color_pair(1) | curses.A_BOLD)
 
         # Instructions
-        for i, line in enumerate(instructions.splitlines(), start=2):
+        lines = instructions.splitlines()
+        for i, line in enumerate(lines, start=2):
             stdscr.addstr(i, 2, line)
 
-        if selected_city:
-            stdscr.addstr(6, 2, f"Selected City: {selected_city}", curses.color_pair(2))
+        if selected_location:
+            stdscr.addstr(
+                6, 2, f"Last query: {selected_location}", curses.color_pair(2)
+            )
 
+        # Weather content
         if weather_output:
-            # Print weather output starting a few lines down
             output_lines = weather_output.split("\n")
             row_offset = 8
             for idx, line in enumerate(output_lines):
@@ -192,68 +239,52 @@ def run_tui(stdscr: "curses._CursesWindow") -> None:
 
         stdscr.refresh()
 
-    # Initial screen draw
+    # Initial screen
     refresh_screen()
 
-    # Main TUI loop
     while True:
         key = stdscr.getch()
-
         if key == ord("q"):
-            # Quit TUI
-            break
+            break  # Quit TUI
 
         elif key == ord("g"):
-            # Prompt user for city name in curses
+            # Prompt user for location
             curses.echo()
-            stdscr.addstr(6, 2, "Enter city: ", curses.color_pair(2))
+            stdscr.addstr(6, 2, "Enter city or zip: ", curses.color_pair(2))
             stdscr.clrtoeol()
             stdscr.refresh()
 
-            # Read city input
-            city_input = stdscr.getstr(6, 14, 50)  # max 50 chars
-            city_name = city_input.decode("utf-8").strip()
+            location_input = stdscr.getstr(6, 22, 50)
+            location = location_input.decode("utf-8").strip()
             curses.noecho()
 
-            # Fetch weather
+            # Clear old weather output lines
+            weather_plain_str = ""
             try:
-                weather_data = fetch_weather(city_name, API_KEY)
+                weather_data = fetch_weather(location, API_KEY)
                 weather_rich_str = format_weather_output(weather_data)
-                # Convert Rich markup to plain text for curses display
-                # or show only textual content in TUI
-                # For simplicity, just remove Rich tags:
-                # (In production, you might parse or colorize further within curses.)
                 weather_plain_str = remove_rich_tags(weather_rich_str)
-                refresh_screen(
-                    selected_city=city_name, weather_output=weather_plain_str
-                )
-
             except requests.RequestException as req_exc:
-                error_message = f"Network error: {req_exc}"
-                show_error(stdscr, error_message)
+                weather_plain_str = f"Network error: {req_exc}"
             except ValueError as val_exc:
-                error_message = f"Data error: {val_exc}"
-                show_error(stdscr, error_message)
+                weather_plain_str = f"Data error: {val_exc}"
             except Exception as exc:
-                error_message = f"Unexpected error: {exc}"
-                show_error(stdscr, error_message)
+                weather_plain_str = f"Unexpected error: {exc}"
 
-        # Update screen if needed
-        refresh_screen()
+            refresh_screen(selected_location=location, weather_output=weather_plain_str)
+
+        else:
+            refresh_screen()
 
 
 def show_error(stdscr: "curses._CursesWindow", message: str) -> None:
-    """
-    Displays an error message at the bottom of the TUI.
-    """
     stdscr.addstr(
         curses.LINES - 1,
         2,
         f"Error: {message} (Press any key to continue)",
         curses.color_pair(3),
     )
-    stdscr.getch()  # Wait for user input
-    # Clear error line
+    stdscr.getch()
     stdscr.move(curses.LINES - 1, 0)
     stdscr.clrtoeol()
 
@@ -265,7 +296,6 @@ def remove_rich_tags(text: str) -> str:
     """
     import re
 
-    # Remove anything in square brackets [like this]
     return re.sub(r"\[.*?\]", "", text)
 
 
@@ -275,11 +305,6 @@ def remove_rich_tags(text: str) -> str:
 
 
 def main():
-    """
-    Main entry point:
-      - Launches TUI if no arguments are passed.
-      - Otherwise, runs Typer for CLI commands.
-    """
     if len(sys.argv) == 1:
         curses.wrapper(run_tui)
     else:
