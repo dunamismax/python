@@ -1,8 +1,9 @@
+#!/usr/bin/env python3
 """
-net_commander_textual.py
+net_commander_typer.py
 
 A cross-platform, menu-driven "Swiss Army Knife" for basic network analysis
-and troubleshooting, rewritten using the Textual TUI framework.
+and troubleshooting, rewritten using the Typer CLI framework.
 
 Features:
     1. Port Scanning (socket)
@@ -16,42 +17,47 @@ Features:
     9. Exit
 
 Author: dunamismax
-Version: 2.0.0 (Textual version)
+Version: 3.0.0 (Typer version)
 
-Note:
+Notes:
     - Scapy operations may require elevated privileges.
     - For large subnets, ICMP sweeps/traceroutes can take noticeable time.
+    - This script provides both subcommands (e.g. `./net_commander_typer.py port-scan`)
+      and an interactive mode (`./net_commander_typer.py interactive`).
+
+Usage Examples:
+    - Interactive mode:
+        $ python net_commander_typer.py interactive
+
+    - Direct subcommands:
+        $ python net_commander_typer.py port-scan --target 192.168.1.10 --ports 22 80 443
 """
 
-import platform
-import subprocess
-import socket
 import sys
 import time
+import socket
+import platform
+import subprocess
 import ipaddress
+from typing import List, Optional
 
-# External libraries
+import typer
 import requests
 import dns.resolver
-from scapy.layers.inet import IP, ICMP, TCP, traceroute
-from scapy.sendrecv import sr1, sr
 
-# Textual imports
-from textual.app import App, ComposeResult
-from textual.containers import Horizontal, Vertical, VerticalScroll
-from textual.screen import Screen
-from textual.widgets import (
-    Header,
-    Footer,
-    Button,
-    Static,
-    Input,
-    TextLog,
-    Label,
-    MenuButton,
-)
+try:
+    from scapy.layers.inet import IP, ICMP, traceroute
+    from scapy.sendrecv import sr1, sr
+except ImportError:
+    # If scapy is not installed, we'll fallback where needed.
+    pass
 
-# ------------- Utility functions (same logic as original) ------------- #
+app = typer.Typer(help="net-commander: A basic network analysis toolkit.")
+
+
+#
+# ------------- Utility functions -------------
+#
 
 
 def detect_os() -> str:
@@ -90,6 +96,9 @@ def scapy_ping_sweep(cidr: str):
 
     Args:
         cidr (str): CIDR notation of the subnet to scan.
+
+    Returns:
+        List[str]: A list of active hosts in the subnet.
     """
     network = ipaddress.ip_network(cidr, strict=False)
     hosts = [str(ip) for ip in network.hosts()]
@@ -98,7 +107,7 @@ def scapy_ping_sweep(cidr: str):
         IP(dst=hosts) / ICMP(), timeout=1, verbose=0  # Suppress Scapy's console output
     )
     active_hosts = []
-    for snd, rcv in answered:
+    for _, rcv in answered:
         active_hosts.append(rcv.src)
 
     return active_hosts
@@ -111,6 +120,9 @@ def fallback_host_discovery(cidr: str):
 
     Args:
         cidr (str): CIDR notation of the subnet to scan.
+
+    Returns:
+        Tuple[List[str], str]: (list of active hosts, multiline output string)
     """
     network = ipaddress.ip_network(cidr, strict=False)
     os_type = detect_os()
@@ -124,7 +136,7 @@ def fallback_host_discovery(cidr: str):
             cmd = f"ping -c 1 -W 1 {ip}"
 
         output = run_command(cmd)
-        # Checking TTL or bytes received
+        # Checking TTL or bytes received in the output
         if "TTL=" in output.upper() or "BYTES=" in output.upper():
             active_hosts.append(str(ip))
             output_lines.append(f"[ACTIVE] {ip}")
@@ -171,465 +183,348 @@ def system_traceroute(target: str) -> str:
     return run_command(cmd)
 
 
-# ------------- Textual Screens for each operation ------------- #
+#
+# ------------- Typer Subcommands -------------
+#
 
 
-class PortScanScreen(Screen):
-    """Screen for performing a basic TCP port scan."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("Port Scan", id="menu-title")
-        yield Label("Enter target hostname or IP:")
-        self.target_input = Input(placeholder="e.g. 192.168.1.10")
-        yield self.target_input
-
-        yield Label("Enter ports (space separated):")
-        self.port_input = Input(placeholder="e.g. 22 80 443")
-        yield self.port_input
-
-        yield Button("Start Scan", id="start-scan")
-        yield Button("Return to Main Menu", id="return")
-
-        self.output_log = TextLog()
-        yield self.output_log
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "start-scan":
-            target = self.target_input.value.strip()
-            port_str = self.port_input.value.strip()
-
-            if not target or not port_str:
-                self.output_log.write("[bold red]Target/ports missing.[/bold red]")
-                return
-
-            # Parse ports
-            ports = []
-            for p in port_str.split():
-                try:
-                    ports.append(int(p))
-                except ValueError:
-                    self.output_log.write(
-                        f"[italic yellow]Invalid port '{p}' skipped.[/italic yellow]"
-                    )
-
-            if not ports:
-                self.output_log.write("[bold red]No valid ports to scan.[/bold red]")
-                return
-
-            self.output_log.write(f"[bold]Starting port scan on {target}...[/bold]")
-            for port in ports:
-                with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
-                    s.settimeout(0.5)
-                    try:
-                        result = s.connect_ex((target, port))
-                        if result == 0:
-                            self.output_log.write(f"Port {port}: [green]OPEN[/green]")
-                        else:
-                            self.output_log.write(f"Port {port}: [red]CLOSED[/red]")
-                    except Exception as e:
-                        self.output_log.write(
-                            f"Port {port} [yellow]ERROR: {e}[/yellow]"
-                        )
-
-            self.output_log.write("[bold green]Port scan complete.[/bold green]")
-
-        elif event.button.id == "return":
-            self.app.pop_screen()
-
-
-class HostDiscoveryScreen(Screen):
-    """Screen for performing a simple host discovery on a subnet via ICMP sweeps."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("Host Discovery", id="menu-title")
-        yield Label("Enter subnet in CIDR notation:")
-        self.cidr_input = Input(placeholder="e.g. 192.168.1.0/24")
-        yield self.cidr_input
-
-        yield Button("Start Discovery", id="start-discovery")
-        yield Button("Return to Main Menu", id="return")
-
-        self.output_log = TextLog()
-        yield self.output_log
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "start-discovery":
-            cidr = self.cidr_input.value.strip()
-            if not cidr:
-                self.output_log.write("[bold red]CIDR is required.[/bold red]")
-                return
-
-            self.output_log.write(f"[bold]Scanning {cidr}...[/bold]")
+@app.command("port-scan")
+def port_scan(
+    target: str = typer.Option(
+        ..., prompt="Target hostname or IP", help="Host to scan."
+    ),
+    ports: List[int] = typer.Option(
+        ..., prompt="Space-separated ports", help="One or more TCP ports."
+    ),
+    timeout: float = typer.Option(
+        0.5, help="Socket timeout for each port connection attempt."
+    ),
+):
+    """
+    Perform a basic TCP port scan on the given target for the specified ports.
+    """
+    typer.echo(f"Starting port scan on {target}...")
+    for port in ports:
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as s:
+            s.settimeout(timeout)
             try:
-                active_hosts = scapy_ping_sweep(cidr)
-                if active_hosts:
-                    self.output_log.write("[bold green]Active Hosts:[/bold green]")
-                    for host in active_hosts:
-                        self.output_log.write(f"  [green]{host}[/green]")
+                result = s.connect_ex((target, port))
+                if result == 0:
+                    typer.echo(f"Port {port}: OPEN")
                 else:
-                    self.output_log.write(
-                        "[bold yellow]No active hosts found.[/bold yellow]"
-                    )
-            except PermissionError:
-                self.output_log.write(
-                    "[bold red]Scapy requires elevated privileges. Using system ping fallback...[/bold red]"
-                )
-                hosts, output = fallback_host_discovery(cidr)
-                self.output_log.write(output)
-                if hosts:
-                    self.output_log.write("\n[bold green]Active hosts:[/bold green]")
-                    for host in hosts:
-                        self.output_log.write(f"[green]  {host}[/green]")
-                else:
-                    self.output_log.write(
-                        "[bold yellow]No active hosts found.[/bold yellow]"
-                    )
-            except Exception as e:
-                self.output_log.write(
-                    f"[bold red]Error using Scapy: {e}\nFalling back to system ping...[/bold red]"
-                )
-                hosts, output = fallback_host_discovery(cidr)
-                self.output_log.write(output)
-                if hosts:
-                    self.output_log.write("\n[bold green]Active hosts:[/bold green]")
-                    for host in hosts:
-                        self.output_log.write(f"[green]  {host}[/green]")
-                else:
-                    self.output_log.write(
-                        "[bold yellow]No active hosts found.[/bold yellow]"
-                    )
-
-        elif event.button.id == "return":
-            self.app.pop_screen()
+                    typer.echo(f"Port {port}: CLOSED")
+            except Exception as exc:
+                typer.echo(f"Port {port} ERROR: {exc}")
+    typer.echo("Port scan complete.")
 
 
-class PingScreen(Screen):
-    """Screen for pinging a specified host."""
+@app.command("host-discovery")
+def host_discovery(
+    cidr: str = typer.Option(
+        ..., prompt="CIDR (e.g. 192.168.1.0/24)", help="Subnet to scan."
+    )
+):
+    """
+    Perform a simple host discovery on a subnet via ICMP sweeps (Scapy) or system ping fallback.
+    """
+    typer.echo(f"Scanning {cidr}...")
 
-    def compose(self) -> ComposeResult:
-        yield Label("Ping Host", id="menu-title")
-        yield Label("Enter host/IP to ping:")
-        self.host_input = Input(placeholder="e.g. google.com")
-        yield self.host_input
-
-        yield Label("Number of pings (default 4):")
-        self.count_input = Input()
-        yield self.count_input
-
-        yield Button("Start Ping", id="start-ping")
-        yield Button("Return to Main Menu", id="return")
-
-        self.output_log = TextLog()
-        yield self.output_log
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "start-ping":
-            target = self.host_input.value.strip()
-            count_str = self.count_input.value.strip()
-
-            try:
-                count = int(count_str) if count_str else 4
-            except ValueError:
-                count = 4
-                self.output_log.write(
-                    "[bold yellow]Invalid count; using default of 4.[/bold yellow]"
-                )
-
-            if not target:
-                self.output_log.write("[bold red]No target provided.[/bold red]")
-                return
-
-            self.output_log.write(f"[bold]Pinging {target}...[/bold]")
-            try:
-                # Attempt Scapy-based ping
-                for i in range(count):
-                    resp = sr1(IP(dst=target) / ICMP(), timeout=1, verbose=0)
-                    if resp is None:
-                        self.output_log.write(f"{i+1}. [red]Request timed out[/red]")
-                    else:
-                        self.output_log.write(
-                            f"{i+1}. Reply from {resp.src} TTL={resp.ttl}"
-                        )
-            except PermissionError:
-                self.output_log.write(
-                    "[bold red]Scapy requires elevated privileges. Falling back to system ping.[/bold red]"
-                )
-                self.output_log.write(system_ping(target, count))
-            except Exception as e:
-                self.output_log.write(f"[bold red]Scapy ping error: {e}[/bold red]")
-                self.output_log.write(system_ping(target, count))
-
-        elif event.button.id == "return":
-            self.app.pop_screen()
-
-
-class TracerouteScreen(Screen):
-    """Screen for performing a traceroute to a specified target."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("Traceroute", id="menu-title")
-        yield Label("Enter host/IP for traceroute:")
-        self.host_input = Input(placeholder="e.g. google.com")
-        yield self.host_input
-
-        yield Button("Start Traceroute", id="start-traceroute")
-        yield Button("Return to Main Menu", id="return")
-
-        self.output_log = TextLog()
-        yield self.output_log
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "start-traceroute":
-            target = self.host_input.value.strip()
-            if not target:
-                self.output_log.write("[bold red]No target provided.[/bold red]")
-                return
-
-            self.output_log.write(f"[bold]Tracing route to {target}...[/bold]")
-            try:
-                ans, unans = traceroute(target, maxttl=20, verbose=0)
-                for snd, rcv in ans:
-                    self.output_log.write(f"[green]{snd.ttl} {rcv.src}[/green]")
-            except PermissionError:
-                self.output_log.write(
-                    "[bold red]Scapy traceroute requires elevated privileges. Falling back to system traceroute.[/bold red]"
-                )
-                self.output_log.write(system_traceroute(target))
-            except Exception as e:
-                self.output_log.write(
-                    f"[bold red]Scapy traceroute error: {e}[/bold red]"
-                )
-                self.output_log.write(system_traceroute(target))
-
-        elif event.button.id == "return":
-            self.app.pop_screen()
-
-
-class DNSLookupScreen(Screen):
-    """Screen for performing a DNS lookup using dnspython."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("DNS Lookup", id="menu-title")
-        yield Label("Enter domain (e.g. example.com):")
-        self.domain_input = Input()
-        yield self.domain_input
-
-        yield Label("Enter DNS record type (default A):")
-        self.record_type_input = Input()
-        yield self.record_type_input
-
-        yield Button("Lookup", id="lookup")
-        yield Button("Return to Main Menu", id="return")
-
-        self.output_log = TextLog()
-        yield self.output_log
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "lookup":
-            domain = self.domain_input.value.strip()
-            record_type = self.record_type_input.value.strip()
-            if not domain:
-                self.output_log.write("[bold red]No domain provided.[/bold red]")
-                return
-
-            if not record_type:
-                record_type = "A"
-
-            self.output_log.write(
-                f"[bold]Looking up {record_type} records for {domain}...[/bold]"
-            )
-            try:
-                answers = dns.resolver.resolve(domain, record_type)
-                for rdata in answers:
-                    self.output_log.write(f"[green]{rdata.to_text()}[/green]")
-            except dns.resolver.NXDOMAIN:
-                self.output_log.write("[red]Domain does not exist.[/red]")
-            except dns.resolver.NoAnswer:
-                self.output_log.write(
-                    f"[yellow]No {record_type} records found.[/yellow]"
-                )
-            except dns.exception.DNSException as e:
-                self.output_log.write(f"[red]DNS lookup error: {e}[/red]")
-
-        elif event.button.id == "return":
-            self.app.pop_screen()
-
-
-class IPConfigScreen(Screen):
-    """Screen for displaying IP configuration."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("Show IP Configuration", id="menu-title")
-        yield Button("Retrieve Configuration", id="retrieve")
-        yield Button("Return to Main Menu", id="return")
-
-        self.output_log = TextLog()
-        yield self.output_log
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "retrieve":
-            os_type = detect_os()
-            if os_type == "Windows":
-                cmd = "ipconfig"
-            else:
-                cmd = "ip addr show"
-            output = run_command(cmd)
-            self.output_log.write(output)
-
-        elif event.button.id == "return":
-            self.app.pop_screen()
-
-
-class HTTPCheckScreen(Screen):
-    """Screen for performing a basic HTTP check via requests."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("HTTP Check", id="menu-title")
-        yield Label("Enter a URL (e.g., https://www.google.com):")
-        self.url_input = Input()
-        yield self.url_input
-
-        yield Button("Check", id="check")
-        yield Button("Return to Main Menu", id="return")
-
-        self.output_log = TextLog()
-        yield self.output_log
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "check":
-            url = self.url_input.value.strip()
-            if not url:
-                self.output_log.write("[bold red]No URL provided.[/bold red]")
-                return
-
-            if not (url.startswith("http://") or url.startswith("https://")):
-                url = f"http://{url}"
-
-            start_time = time.time()
-            try:
-                response = requests.get(url, timeout=5)
-                elapsed = time.time() - start_time
-                self.output_log.write(
-                    f"[bold green]HTTP GET {url} - Status: {response.status_code}, "
-                    f"Time: {elapsed:.2f} seconds[/bold green]"
-                )
-            except requests.exceptions.RequestException as e:
-                self.output_log.write(f"[bold red]HTTP check failed: {e}[/bold red]")
-
-        elif event.button.id == "return":
-            self.app.pop_screen()
-
-
-class AboutScreen(Screen):
-    """Screen displaying information about the net-commander tool."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("About net-commander", id="menu-title")
-        about_text = (
-            "[bold]net-commander:[/bold] A cross-platform, menu-driven network toolkit.\n\n"
-            "Features:\n"
-            "  1) Port Scanning\n"
-            "  2) Host Discovery (Scapy-based ICMP sweeps)\n"
-            "  3) Ping (Scapy-based)\n"
-            "  4) Traceroute (Scapy-based)\n"
-            "  5) DNS Lookup (dnspython)\n"
-            "  6) Show IP Configuration\n"
-            "  7) HTTP Check\n\n"
-            "Author: dunamismax\n"
-            "Version: 2.0.0\n"
-        )
-        yield Label(about_text)
-        yield Button("Return to Main Menu", id="return")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "return":
-            self.app.pop_screen()
-
-
-# ------------- Main Menu Screen ------------- #
-
-
-class MainMenu(Screen):
-    """Main menu screen for net-commander."""
-
-    def compose(self) -> ComposeResult:
-        yield Label("net-commander - Main Menu", id="menu-title")
-        yield Button("1) Port Scan", id="1")
-        yield Button("2) Host Discovery", id="2")
-        yield Button("3) Ping Host", id="3")
-        yield Button("4) Traceroute", id="4")
-        yield Button("5) DNS Lookup", id="5")
-        yield Button("6) Show IP Configuration", id="6")
-        yield Button("7) HTTP Check", id="7")
-        yield Button("8) About net-commander", id="8")
-        yield Button("9) Exit", id="9")
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        choice = event.button.id
-        if choice == "1":
-            self.app.push_screen(PortScanScreen())
-        elif choice == "2":
-            self.app.push_screen(HostDiscoveryScreen())
-        elif choice == "3":
-            self.app.push_screen(PingScreen())
-        elif choice == "4":
-            self.app.push_screen(TracerouteScreen())
-        elif choice == "5":
-            self.app.push_screen(DNSLookupScreen())
-        elif choice == "6":
-            self.app.push_screen(IPConfigScreen())
-        elif choice == "7":
-            self.app.push_screen(HTTPCheckScreen())
-        elif choice == "8":
-            self.app.push_screen(AboutScreen())
-        elif choice == "9":
-            self.app.exit()
+    # Attempt Scapy-based approach
+    try:
+        active_hosts = scapy_ping_sweep(cidr)
+        if active_hosts:
+            typer.secho("Active Hosts:", fg=typer.colors.GREEN, bold=True)
+            for host in active_hosts:
+                typer.echo(f"  {host}")
         else:
-            pass
+            typer.secho("No active hosts found.", fg=typer.colors.YELLOW, bold=True)
+    except PermissionError:
+        typer.secho(
+            "Scapy requires elevated privileges. Using system ping fallback...",
+            fg=typer.colors.RED,
+            bold=True,
+        )
+        hosts, output = fallback_host_discovery(cidr)
+        typer.echo(output)
+        if hosts:
+            typer.secho("\nActive hosts:", fg=typer.colors.GREEN, bold=True)
+            for host in hosts:
+                typer.echo(f"  {host}")
+        else:
+            typer.secho("No active hosts found.", fg=typer.colors.YELLOW, bold=True)
+    except Exception as exc:
+        typer.secho(
+            f"Error using Scapy: {exc}\nFalling back to system ping...",
+            fg=typer.colors.RED,
+            bold=True,
+        )
+        hosts, output = fallback_host_discovery(cidr)
+        typer.echo(output)
+        if hosts:
+            typer.secho("\nActive hosts:", fg=typer.colors.GREEN, bold=True)
+            for host in hosts:
+                typer.echo(f"  {host}")
+        else:
+            typer.secho("No active hosts found.", fg=typer.colors.YELLOW, bold=True)
 
 
-# ------------- Main Application Class ------------- #
-
-
-class NetCommander(App):
+@app.command()
+def ping(
+    target: str = typer.Option(
+        ..., prompt="Target host/IP", help="Host or IP to ping."
+    ),
+    count: int = typer.Option(4, help="Number of ping attempts."),
+):
     """
-    Textual TUI app for net-commander.
-    Press 'q' at any time to exit from any screen (Textual default key binding).
+    Ping a specified host using Scapy-based ping if possible, else system ping.
     """
+    typer.echo(f"Pinging {target}...")
+    try:
+        # Attempt Scapy-based ping
+        for i in range(count):
+            resp = sr1(IP(dst=target) / ICMP(), timeout=1, verbose=0)
+            if resp is None:
+                typer.secho(f"{i+1}. Request timed out", fg=typer.colors.RED)
+            else:
+                typer.echo(f"{i+1}. Reply from {resp.src} TTL={resp.ttl}")
+    except PermissionError:
+        typer.secho(
+            "Scapy requires elevated privileges. Falling back to system ping...",
+            fg=typer.colors.RED,
+        )
+        typer.echo(system_ping(target, count))
+    except Exception as exc:
+        typer.secho(f"Scapy ping error: {exc}", fg=typer.colors.RED)
+        typer.echo(system_ping(target, count))
 
-    CSS = """
-    #menu-title {
-        color: cyan;
-        text-align: center;
-        padding: 1 0;
-    }
 
-    TextLog {
-        height: 1fr;
-        margin-top: 1;
-        border: tall $accent;
-        overflow: auto;
-    }
-
-    Button {
-        margin: 1;
-    }
-
-    Label {
-        margin: 1 0 0 0;
-    }
+@app.command()
+def tracer(
+    target: str = typer.Option(
+        ..., prompt="Target host/IP", help="Host or IP to traceroute."
+    )
+):
     """
+    Perform a traceroute to a specified target using Scapy if possible, else system traceroute.
+    """
+    typer.echo(f"Tracing route to {target}...")
+    try:
+        ans, _unans = traceroute(target, maxttl=20, verbose=0)
+        for snd, rcv in ans:
+            typer.echo(f"{snd.ttl}. {rcv.src}")
+    except PermissionError:
+        typer.secho(
+            "Scapy traceroute requires elevated privileges. Falling back to system traceroute...",
+            fg=typer.colors.RED,
+        )
+        typer.echo(system_traceroute(target))
+    except Exception as exc:
+        typer.secho(f"Scapy traceroute error: {exc}", fg=typer.colors.RED)
+        typer.echo(system_traceroute(target))
 
-    def on_mount(self) -> None:
-        """Called once the app is ready; load the main menu screen."""
-        self.push_screen(MainMenu())
 
-    def compose(self) -> ComposeResult:
-        """Build the app layout: a vertical stack with Header, main container, and Footer."""
-        yield Header()
-        # A container for screens will be rendered in the middle automatically.
-        yield Footer()
+@app.command("dns-lookup")
+def dns_lookup(
+    domain: str = typer.Option(
+        ..., prompt="Domain (e.g. example.com)", help="Domain to query."
+    ),
+    record_type: str = typer.Option("A", help="DNS record type (default=A)."),
+):
+    """
+    Perform a DNS lookup using dnspython.
+    """
+    typer.echo(f"Looking up {record_type} record(s) for {domain}...")
+    try:
+        answers = dns.resolver.resolve(domain, record_type)
+        for rdata in answers:
+            typer.secho(rdata.to_text(), fg=typer.colors.GREEN)
+    except dns.resolver.NXDOMAIN:
+        typer.secho("Domain does not exist.", fg=typer.colors.RED)
+    except dns.resolver.NoAnswer:
+        typer.secho(f"No {record_type} records found.", fg=typer.colors.YELLOW)
+    except dns.exception.DNSException as exc:
+        typer.secho(f"DNS lookup error: {exc}", fg=typer.colors.RED)
+
+
+@app.command("ipconfig")
+def ip_config():
+    """
+    Display IP configuration using system commands.
+    """
+    os_type = detect_os()
+    if os_type == "Windows":
+        cmd = "ipconfig"
+    else:
+        cmd = "ip addr show"
+    typer.echo(run_command(cmd))
+
+
+@app.command("http-check")
+def http_check(
+    url: str = typer.Option(
+        ..., prompt="URL (e.g. https://www.google.com)", help="URL to check."
+    )
+):
+    """
+    Perform a basic HTTP GET request using the 'requests' library.
+    """
+    # Ensure URL starts with http:// or https://
+    if not (url.startswith("http://") or url.startswith("https://")):
+        url = f"http://{url}"
+
+    typer.echo(f"Checking {url}...")
+    start_time = time.time()
+    try:
+        response = requests.get(url, timeout=5)
+        elapsed = time.time() - start_time
+        typer.secho(
+            f"HTTP GET {url} - Status: {response.status_code}, "
+            f"Time: {elapsed:.2f} seconds",
+            fg=typer.colors.GREEN,
+        )
+    except requests.exceptions.RequestException as exc:
+        typer.secho(f"HTTP check failed: {exc}", fg=typer.colors.RED)
+
+
+@app.command()
+def about():
+    """
+    Display information about net-commander.
+    """
+    info = (
+        "net-commander: A cross-platform, menu-driven network toolkit.\n\n"
+        "Features:\n"
+        "  1) Port Scanning\n"
+        "  2) Host Discovery (Scapy-based ICMP sweeps)\n"
+        "  3) Ping (Scapy-based)\n"
+        "  4) Traceroute (Scapy-based)\n"
+        "  5) DNS Lookup (dnspython)\n"
+        "  6) Show IP Configuration\n"
+        "  7) HTTP Check\n\n"
+        "Author: dunamismax\n"
+        "Version: 3.0.0 (Typer version)\n"
+    )
+    typer.echo(info)
+
+
+#
+# ------------- Interactive Menu -------------
+#
+
+
+def interactive_menu():
+    """
+    Provide an interactive, menu-driven CLI using Typer prompts.
+    """
+    while True:
+        typer.secho(
+            "\n--- net-commander (Interactive Mode) ---",
+            fg=typer.colors.CYAN,
+            bold=True,
+        )
+        typer.echo(
+            "1) Port Scan\n"
+            "2) Host Discovery\n"
+            "3) Ping Host\n"
+            "4) Traceroute\n"
+            "5) DNS Lookup\n"
+            "6) Show IP Configuration\n"
+            "7) HTTP Check\n"
+            "8) About\n"
+            "9) Exit\n"
+        )
+        choice = typer.prompt("Enter your choice", default="9")
+
+        if choice == "1":
+            _port_scan_interactive()
+        elif choice == "2":
+            _host_discovery_interactive()
+        elif choice == "3":
+            _ping_interactive()
+        elif choice == "4":
+            _tracer_interactive()
+        elif choice == "5":
+            _dns_lookup_interactive()
+        elif choice == "6":
+            typer.run(ip_config)  # or just call ip_config() directly
+        elif choice == "7":
+            _http_check_interactive()
+        elif choice == "8":
+            about()
+        elif choice == "9":
+            typer.echo("Exiting net-commander.")
+            sys.exit(0)
+        else:
+            typer.secho("Invalid choice. Please try again.", fg=typer.colors.RED)
+
+
+@app.command()
+def interactive():
+    """
+    Launch an interactive menu-driven CLI mode.
+    """
+    interactive_menu()
+
+
+#
+# ------------- Helper functions for interactive mode -------------
+#
+
+
+def _port_scan_interactive():
+    target = typer.prompt("Enter target hostname or IP")
+    ports_str = typer.prompt("Enter space-separated ports (e.g. 22 80 443)")
+    try:
+        ports = [int(p.strip()) for p in ports_str.split()]
+    except ValueError:
+        typer.secho(
+            "Invalid port(s). Please enter numeric values.", fg=typer.colors.RED
+        )
+        return
+    port_scan.callback(
+        target=target, ports=ports
+    )  # Directly call the Typer subcommand logic
+
+
+def _host_discovery_interactive():
+    cidr = typer.prompt("Enter CIDR notation (e.g. 192.168.1.0/24)")
+    host_discovery.callback(cidr=cidr)
+
+
+def _ping_interactive():
+    target = typer.prompt("Enter the host/IP to ping")
+    count = typer.prompt("Number of pings (default 4)", default="4")
+    try:
+        count_num = int(count)
+    except ValueError:
+        count_num = 4
+    ping.callback(target=target, count=count_num)
+
+
+def _tracer_interactive():
+    target = typer.prompt("Enter the host/IP for traceroute")
+    tracer.callback(target=target)
+
+
+def _dns_lookup_interactive():
+    domain = typer.prompt("Enter domain (e.g. example.com)")
+    record_type = typer.prompt("Enter record type (default A)", default="A")
+    dns_lookup.callback(domain=domain, record_type=record_type)
+
+
+def _http_check_interactive():
+    url = typer.prompt("Enter URL (e.g. https://www.google.com)")
+    http_check.callback(url=url)
+
+
+#
+# ------------- Main entry point -------------
+#
+
+
+def main():
+    app()
 
 
 if __name__ == "__main__":
-    NetCommander().run()
+    main()

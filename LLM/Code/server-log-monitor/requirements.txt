@@ -1,2 +1,2 @@
-textual
+typer
 asyncssh

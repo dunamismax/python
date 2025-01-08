@@ -1,15 +1,19 @@
+#!/usr/bin/env python3
 """
 secure-notes.py
 ---------------
-A production-ready encrypted notes TUI application in Python.
+A production-ready encrypted notes CLI application in Python using Typer.
 
 Features:
 - Asks for an encryption password at startup; if first run, creates a new encrypted file.
-- Displays a list of notes and allows the user to create, view, and edit notes.
-- Uses the Textual library for a polished TUI.
+- Displays a list of notes and allows the user to create, view, and edit notes—all through a CLI menu.
+- Uses Typer for an interactive command-line interface.
 - Encrypts/decrypts notes using the Fernet (AES 128-bit in CBC mode + HMAC) scheme from the 'cryptography' package.
-- Demonstrates best practices for password-based key derivation (using PBKDF2) and TUI design.
+- Demonstrates best practices for password-based key derivation (using PBKDF2).
 - Error handling, docstrings, and a straightforward design for production usage.
+
+Usage:
+    Run `python secure-notes.py` to start the interactive CLI.
 """
 
 import os
@@ -19,36 +23,29 @@ import hashlib
 import secrets
 from typing import List, Dict, Optional
 
+import typer
 from cryptography.hazmat.primitives.kdf.pbkdf2 import PBKDF2HMAC
 from cryptography.hazmat.primitives import hashes
 from cryptography.fernet import Fernet, InvalidToken
 
-from textual.app import App, ComposeResult
-from textual.containers import Vertical, Horizontal, Container, ScrollableContainer
-from textual.widgets import (
-    Header,
-    Footer,
-    Static,
-    Input,
-    Button,
-    ListView,
-    ListItem,
-    Label,
-)
-from textual.screen import Screen
-from textual import events
-
-
 # ---------------------------------------------------------------------------
 # Constants and helper functions
 # ---------------------------------------------------------------------------
+
+app = typer.Typer(help="Secure Notes - An encrypted notes CLI application.")
 
 DEFAULT_ENC_FILE = "secure_notes.enc"
 PBKDF2_ITERATIONS = 200_000  # Reasonably strong iteration count
 
 
 def derive_key_from_password(password: str, salt: bytes) -> bytes:
-    """Derive a Fernet-compatible key from a user-provided password and salt."""
+    """
+    Derive a Fernet-compatible key from a user-provided password and salt.
+
+    :param password: The password string input by the user.
+    :param salt: Random bytes used as a salt for PBKDF2.
+    :return: A URL-safe base64-encoded key suitable for Fernet.
+    """
     kdf = PBKDF2HMAC(
         algorithm=hashes.SHA256(),
         length=32,
@@ -60,12 +57,24 @@ def derive_key_from_password(password: str, salt: bytes) -> bytes:
 
 
 def encrypt_data(plaintext: bytes, fernet: Fernet) -> bytes:
-    """Encrypt the given plaintext using the provided Fernet object."""
+    """
+    Encrypt the given plaintext using the provided Fernet object.
+
+    :param plaintext: The raw bytes to encrypt.
+    :param fernet: A Fernet object initialized with the appropriate key.
+    :return: Encrypted ciphertext as bytes.
+    """
     return fernet.encrypt(plaintext)
 
 
 def decrypt_data(ciphertext: bytes, fernet: Fernet) -> bytes:
-    """Decrypt the given ciphertext using the provided Fernet object."""
+    """
+    Decrypt the given ciphertext using the provided Fernet object.
+
+    :param ciphertext: The encrypted bytes.
+    :param fernet: A Fernet object initialized with the appropriate key.
+    :return: Decrypted plaintext as bytes.
+    """
     return fernet.decrypt(ciphertext)
 
 
@@ -75,6 +84,10 @@ def load_notes_file(
     """
     Load notes from an encrypted file. If file doesn't exist, return an empty list.
     If the file is corrupted or the password is incorrect, raise an InvalidToken.
+
+    :param password: The user-entered password.
+    :param filename: The encrypted file path.
+    :return: A list of note dictionaries.
     """
     if not os.path.isfile(filename):
         # File does not exist -> new data
@@ -101,6 +114,10 @@ def save_notes_file(
     """
     Save notes to an encrypted file. Generates a salt if none exists, or uses the
     existing file's salt to maintain consistency.
+
+    :param password: The user-entered password.
+    :param notes: A list of dictionaries representing notes.
+    :param filename: The encrypted file path.
     """
     # If file doesn't exist, generate a new salt.
     # If it exists, reuse the salt so the user can continue using the same password.
@@ -121,172 +138,163 @@ def save_notes_file(
 
 
 # ---------------------------------------------------------------------------
-# Screens
+# Global state (populated after user enters password)
 # ---------------------------------------------------------------------------
 
-
-class LoginScreen(Screen):
-    """Screen that prompts the user for their encryption password."""
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Vertical(
-            Static(
-                "Welcome to Secure Notes\n\nPlease enter your encryption password.\n"
-                "If this is your first time, a new notes file will be created.\n"
-            ),
-            Input(
-                placeholder="Encryption Password", password=True, id="password_input"
-            ),
-            Button("Submit", id="login_submit"),
-        )
-        yield Footer()
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "login_submit":
-            password_widget = self.query_one("#password_input", Input)
-            password = password_widget.value.strip()
-
-            # Attempt to load existing notes or create new file if doesn't exist
-            try:
-                notes = load_notes_file(password, DEFAULT_ENC_FILE)
-            except InvalidToken:
-                # Show error message
-                self.app.push_screen(
-                    ErrorScreen("Incorrect password or corrupted file.")
-                )
-                return
-
-            # If load succeeds, store the password & notes in app data and push main screen
-            self.app.password = password
-            self.app.notes = notes
-            self.app.push_screen(MainNotesScreen())
-
-
-class ErrorScreen(Screen):
-    """Screen to display an error and let user go back to login."""
-
-    def __init__(self, message: str):
-        super().__init__()
-        self.message = message
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Vertical(
-            Static(f"Error: {self.message}"),
-            Button("Back", id="back_to_login"),
-        )
-        yield Footer()
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "back_to_login":
-            await self.app.pop_screen()  # return to previous screen
-
-
-class MainNotesScreen(Screen):
-    """Main screen for viewing and managing notes."""
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Horizontal(
-            Vertical(
-                Static("Your Secure Notes:", id="notes_label"),
-                ListView(id="notes_list"),
-                Button("New Note", id="new_note_btn"),
-            ),
-            ScrollableContainer(
-                Static("Select a note to view or edit.", id="note_detail"),
-                id="detail_container",
-            ),
-        )
-        yield Footer()
-
-    def on_mount(self) -> None:
-        """Populate the list of notes on mounting."""
-        self.populate_notes_list()
-
-    def populate_notes_list(self) -> None:
-        """Populate the notes list from self.app.notes."""
-        list_view = self.query_one("#notes_list", ListView)
-        list_view.clear()
-
-        for idx, note in enumerate(self.app.notes):
-            title = note["title"] if note["title"] else f"Untitled ({idx})"
-            list_view.append(ListItem(Label(title)))
-
-    async def on_list_view_selected(self, event: ListView.Selected) -> None:
-        """When the user selects a note from the ListView, display it in the detail section."""
-        index = event.index
-        if 0 <= index < len(self.app.notes):
-            selected_note = self.app.notes[index]
-            detail_widget = self.query_one("#note_detail", Static)
-            content = (
-                f"Title: {selected_note['title']}\n"
-                f"{'-'*40}\n"
-                f"{selected_note['content']}"
-            )
-            detail_widget.update(content)
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "new_note_btn":
-            self.app.push_screen(NoteEditorScreen())
-
-
-class NoteEditorScreen(Screen):
-    """Screen for creating a new note or editing an existing note in the future."""
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Vertical(
-            Static("Create a New Note"),
-            Input(placeholder="Title", id="note_title"),
-            Input(placeholder="Content", id="note_content"),
-            Button("Save", id="save_note"),
-            Button("Cancel", id="cancel_note"),
-        )
-        yield Footer()
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "save_note":
-            title_widget = self.query_one("#note_title", Input)
-            content_widget = self.query_one("#note_content", Input)
-
-            title = title_widget.value.strip()
-            content = content_widget.value.strip()
-
-            self.app.notes.append({"title": title, "content": content})
-            save_notes_file(self.app.password, self.app.notes, DEFAULT_ENC_FILE)
-
-            await self.app.pop_screen()  # Return to MainNotesScreen
-            # Refresh main screen list
-            main_screen = self.app.get_screen_by_name("mainnotesscreen")
-            if main_screen:
-                main_screen.populate_notes_list()
-        elif event.button.id == "cancel_note":
-            await self.app.pop_screen()  # Return to MainNotesScreen
+NOTES: List[Dict[str, str]] = []
+PASSWORD: Optional[str] = None
 
 
 # ---------------------------------------------------------------------------
-# Main Application
+# Interactive CLI
 # ---------------------------------------------------------------------------
 
 
-class SecureNotesApp(App):
-    """The main Textual App for Secure Notes."""
+@app.command()
+def main() -> None:
+    """
+    Secure Notes interactive CLI.
 
-    CSS_PATH = None  # Or a path to a textual CSS file if you want advanced theming
-    password: Optional[str] = None
-    notes: List[Dict[str, str]] = []
+    Prompts for an encryption password on startup and enters an interactive menu
+    to list, create, view, and edit notes.
+    """
+    global NOTES, PASSWORD
 
-    def on_mount(self) -> None:
-        """Push the LoginScreen when the app starts."""
-        self.push_screen(LoginScreen())
+    # Prompt the user for their password, hiding input for security
+    typer.echo("Welcome to Secure Notes!")
+    PASSWORD = typer.prompt("Please enter your encryption password", hide_input=True)
 
-    def on_error(self, error: Exception) -> None:
-        """Handle unexpected exceptions gracefully."""
-        self.push_screen(ErrorScreen(str(error)))
+    # Attempt to load existing notes. If file doesn't exist, an empty list is returned.
+    try:
+        NOTES = load_notes_file(PASSWORD, DEFAULT_ENC_FILE)
+        typer.echo("Notes loaded successfully.")
+    except InvalidToken as e:
+        typer.secho(str(e), fg=typer.colors.RED)
+        typer.echo("Exiting...")
+        raise typer.Exit(code=1)
 
+    # Enter an interactive loop
+    while True:
+        typer.echo("\nActions:")
+        typer.echo("[1] List Notes")
+        typer.echo("[2] Create New Note")
+        typer.echo("[3] View Note by Index")
+        typer.echo("[4] Edit Note by Index")
+        typer.echo("[5] Quit\n")
+
+        choice = typer.prompt("Choose an action", default="5")
+
+        if choice == "1":
+            list_notes()
+        elif choice == "2":
+            create_note()
+        elif choice == "3":
+            view_note()
+        elif choice == "4":
+            edit_note()
+        elif choice == "5":
+            typer.echo("Goodbye!")
+            break
+        else:
+            typer.echo("Invalid choice. Please try again.")
+
+
+def list_notes() -> None:
+    """
+    List all notes in the current session.
+    """
+    if not NOTES:
+        typer.echo("No notes found.")
+        return
+
+    typer.echo("\nYour Secure Notes:")
+    for idx, note in enumerate(NOTES):
+        title = note["title"] if note["title"] else f"Untitled ({idx})"
+        typer.echo(f"{idx}: {title}")
+
+
+def create_note() -> None:
+    """
+    Prompt the user to create a new note, then save it.
+    """
+    global NOTES, PASSWORD
+
+    title = typer.prompt("Note Title (optional, press ENTER to skip)", default="")
+    content = typer.prompt(
+        "Note Content (multi-line supported, press ENTER to finish)", default=""
+    )
+
+    NOTES.append({"title": title, "content": content})
+    save_notes_file(PASSWORD, NOTES, DEFAULT_ENC_FILE)
+    typer.echo("New note saved successfully!")
+
+
+def view_note() -> None:
+    """
+    Prompt the user for an index, then display the corresponding note.
+    """
+    if not NOTES:
+        typer.echo("No notes to view.")
+        return
+
+    try:
+        idx = typer.prompt("Enter the note index to view", type=int)
+        if idx < 0 or idx >= len(NOTES):
+            typer.echo("Invalid note index.")
+            return
+
+        selected_note = NOTES[idx]
+        typer.echo(f"\n--- Note {idx} ---")
+        typer.echo(f"Title: {selected_note['title']}")
+        typer.echo("-" * 40)
+        typer.echo(f"{selected_note['content']}\n")
+
+    except ValueError:
+        typer.echo("Please enter a valid integer index.")
+
+
+def edit_note() -> None:
+    """
+    Prompt the user for an index, then allow editing of the existing note.
+    """
+    global NOTES, PASSWORD
+
+    if not NOTES:
+        typer.echo("No notes to edit.")
+        return
+
+    try:
+        idx = typer.prompt("Enter the note index to edit", type=int)
+        if idx < 0 or idx >= len(NOTES):
+            typer.echo("Invalid note index.")
+            return
+
+        # Show current title/content for reference
+        current_title = NOTES[idx]["title"]
+        current_content = NOTES[idx]["content"]
+
+        typer.echo(f"\nCurrent Title: {current_title}")
+        new_title = typer.prompt(
+            "New Title (press ENTER to keep current)", default=current_title
+        )
+
+        typer.echo(f"\nCurrent Content:\n{current_content}")
+        new_content = typer.prompt(
+            "New Content (press ENTER to keep current)", default=current_content
+        )
+
+        # Update the note
+        NOTES[idx] = {"title": new_title, "content": new_content}
+        save_notes_file(PASSWORD, NOTES, DEFAULT_ENC_FILE)
+        typer.echo(f"Note {idx} updated successfully!")
+
+    except ValueError:
+        typer.echo("Please enter a valid integer index.")
+
+
+# ---------------------------------------------------------------------------
+# Entrypoint
+# ---------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    app = SecureNotesApp()
-    app.run()
+    app()

@@ -1,22 +1,27 @@
 #!/usr/bin/env python3
 """
-py-top.py
-A Textual-based TUI that displays real-time CPU, memory, and process usage.
+py-top: An interactive CLI app using Typer that runs a Textual-based TUI
+for displaying real-time CPU, memory, and process usage.
 
 Usage:
-  python py-top.py
+  python py-top.py run-tui
 
-Press 'q' or 'Ctrl+C' to exit.
+Optional arguments:
+  --refresh-interval FLOAT  Seconds between screen updates (default: 1.0)
+
+Press 'q' or 'Ctrl+C' to exit the TUI.
 """
 
 import asyncio
 import psutil
+import typer
+
 from textual.app import App, ComposeResult
 from textual.containers import Vertical, Horizontal, ScrollableContainer
-from textual.widgets import Static, DataTable, Header, Footer, ProgressBar
 from textual.reactive import reactive
+from textual.widgets import Static, DataTable, Header, Footer, ProgressBar
 
-REFRESH_INTERVAL = 1.0  # seconds between refreshes
+app = typer.Typer(help="A Typer-based CLI for an interactive Textual TUI.")
 
 
 class SystemStats(Static):
@@ -30,8 +35,8 @@ class SystemStats(Static):
     def compose(self) -> ComposeResult:
         """Compose the child widgets (two progress bars)."""
         with Vertical():
-            yield ProgressBar(total=100, show_percentage=True, name="cpu_bar")
-            yield ProgressBar(total=100, show_percentage=True, name="mem_bar")
+            yield ProgressBar(total=100, show_percentage=True, id="cpu_bar")
+            yield ProgressBar(total=100, show_percentage=True, id="mem_bar")
 
     def watch_cpu_usage(self, usage: float) -> None:
         """Called automatically when cpu_usage is updated."""
@@ -57,7 +62,6 @@ class ProcessTable(DataTable):
         self.show_footer = False
         self.zebra_stripes = True
 
-        # Define columns (stretch=False uses minimal width, can adjust as needed)
         self.add_column("PID", width=8)
         self.add_column("USER", width=16)
         self.add_column("NAME", width=25)
@@ -99,6 +103,16 @@ class PyTop(App):
 
     BINDINGS = [("q", "quit", "Quit the application")]
 
+    def __init__(self, refresh_interval: float = 1.0) -> None:
+        """
+        Initialize the PyTop application.
+
+        Args:
+            refresh_interval (float): Seconds between data refreshes.
+        """
+        super().__init__()
+        self.refresh_interval = refresh_interval
+
     def compose(self) -> ComposeResult:
         """
         Compose the layout:
@@ -116,24 +130,21 @@ class PyTop(App):
     async def on_mount(self) -> None:
         """
         Called when the app is first mounted.
-        We kick off the auto-refresh task here.
+        We schedule the auto-refresh task here.
         """
         self.system_stats = self.query_one(SystemStats)
         self.process_table = self.query_one(ProcessTable)
-        self.set_interval(REFRESH_INTERVAL, self.refresh_data)
+        self.set_interval(self.refresh_interval, self.refresh_data)
 
     def refresh_data(self) -> None:
         """
         Fetch latest CPU, Memory, and Process stats; update widgets.
         """
-        # Gather CPU & memory stats
         cpu_percent = psutil.cpu_percent(interval=None)
         mem_info = psutil.virtual_memory()
-        mem_percent = mem_info.percent
 
-        # Update reactive fields in SystemStats widget
         self.system_stats.cpu_usage = cpu_percent
-        self.system_stats.mem_usage = mem_percent
+        self.system_stats.mem_usage = mem_info.percent
 
         # Gather processes, sorted by CPU usage
         processes = []
@@ -145,18 +156,23 @@ class PyTop(App):
             except (psutil.NoSuchProcess, psutil.AccessDenied):
                 continue
 
-        # Sort by CPU usage descending
         processes.sort(key=lambda x: x["cpu_percent"], reverse=True)
-
-        # Update the data table
         self.process_table.update_process_data(processes)
 
     def action_quit(self) -> None:
-        """
-        Action for the 'q' binding. Exits the application cleanly.
-        """
+        """Action for the 'q' binding. Exits the application cleanly."""
         self.exit()
 
 
+@app.command()
+def run_tui(
+    refresh_interval: float = typer.Option(1.0, help="Seconds between screen updates")
+):
+    """
+    Start the Textual TUI for real-time system monitoring.
+    """
+    asyncio.run(PyTop(refresh_interval=refresh_interval).run())
+
+
 if __name__ == "__main__":
-    asyncio.run(PyTop().run())
+    app()

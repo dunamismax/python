@@ -1,4 +1,4 @@
-textual
+typer
 requests
 dnspython
 scapy

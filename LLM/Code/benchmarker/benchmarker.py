@@ -1,21 +1,29 @@
+#!/usr/bin/env python3
 """
-benchmarker.py - A Textual TUI CPU and RAM benchmarker
+benchmarker.py - An Interactive Typer CLI CPU and RAM benchmarker
 
 Requirements:
     - Python 3.8+
-    - textual (pip install textual)
+    - typer (pip install typer)
 
 Usage:
+    # Method 1: Interactive Menu
     python benchmarker.py
 
-This application provides a menu to select between:
-    1) CPU Benchmark
-    2) RAM Benchmark
-    3) Both CPU & RAM
+    # Method 2: Direct Commands
+    python benchmarker.py cpu
+    python benchmarker.py ram --list-size 5000000
+    python benchmarker.py both
 
-When a benchmark starts, it will:
-    - Spin up multiple CPU workers to keep CPU usage high for ~10 seconds.
-    - Allocate and hold a large list of random data in memory for ~10 seconds (RAM test).
+Description:
+    This application allows you to run:
+      1) CPU Benchmark
+      2) RAM Benchmark
+      3) Both CPU & RAM
+
+It runs benchmarks by:
+    - Spinning up multiple CPU workers to keep CPU usage high for ~10 seconds.
+    - Allocating and holding a large list of random data in memory for ~10 seconds (RAM test).
 
 Press Ctrl+C to exit at any time.
 """
@@ -25,54 +33,52 @@ import math
 import time
 import random
 import threading
+import multiprocessing
 from concurrent.futures import ThreadPoolExecutor
 
-from textual.app import App, ComposeResult
-from textual.screen import Screen
-from textual.widgets import Button, Static, Header, Footer
-from textual.containers import Vertical, Horizontal, Container
-from textual.reactive import reactive
+import typer
 
-# ---------------------------
-# Helpers for Benchmark Logic
-# ---------------------------
+app = typer.Typer(help="A CPU and RAM benchmarking CLI using Typer.")
+
+
+# ------------------------------------------------------------------------------
+# Benchmark Logic
+# ------------------------------------------------------------------------------
 
 
 def cpu_stress_test(duration: float = 10.0, workers: int = None) -> None:
     """
-    Keep CPU cores busy for 'duration' seconds by repeatedly performing
-    math operations in multiple threads.
+    Keep CPU cores busy for 'duration' seconds by repeatedly performing math
+    operations in multiple threads.
+
+    :param duration: How many seconds to keep the CPU busy.
+    :param workers:  Number of worker threads; defaults to the CPU count.
     """
     if workers is None:
-        # By default, use the number of available logical CPUs
-        import multiprocessing
-
         workers = multiprocessing.cpu_count()
 
     def cpu_heavy_task() -> None:
         end_time = time.time() + duration
         result = 0
         while time.time() < end_time:
-            # Some semi-random math computations
-            # to keep the CPU busy
-            for _ in range(50000):
+            # Some semi-random math computations to keep the CPU busy
+            for _ in range(50_000):
                 x = random.random()
                 result += int(math.sqrt(x**2))
 
     with ThreadPoolExecutor(max_workers=workers) as executor:
         tasks = [executor.submit(cpu_heavy_task) for _ in range(workers)]
-        # Wait for all threads to finish
+        # Wait for all threads to finish and propagate any exceptions
         for t in tasks:
-            t.result()  # Just to make sure exceptions, if any, propagate
+            t.result()
 
 
 def ram_stress_test(duration: float = 10.0, list_size: int = 10_000_000) -> None:
     """
     Allocate a large list of random integers to consume RAM for 'duration' seconds.
-    list_size determines how large the allocated list will be.
 
-    Note: This can quickly consume hundreds of MBs of RAM depending on list_size.
-          Adjust with caution if you have limited memory.
+    :param duration: How many seconds to hold allocated memory.
+    :param list_size: Size of the allocated list (each element ~some bytes).
     """
     # Allocate
     big_list = [random.randint(0, 100) for _ in range(list_size)]
@@ -80,140 +86,186 @@ def ram_stress_test(duration: float = 10.0, list_size: int = 10_000_000) -> None
     # Hold for the specified duration
     time.sleep(duration)
 
-    # Deallocate by letting big_list go out of scope at function exit
+    # Deallocate by letting big_list go out of scope
 
 
-def do_benchmark(cpu: bool, ram: bool, callback=None) -> None:
+def do_benchmark(
+    cpu: bool, ram: bool, duration: float = 10.0, list_size: int = 10_000_000
+) -> None:
     """
-    Executes CPU and/or RAM benchmarks in parallel (if both are selected).
-    'callback' is optionally called after each test (useful to update TUI).
+    Execute CPU and/or RAM benchmarks, possibly in parallel.
+
+    :param cpu:       Whether to run the CPU benchmark.
+    :param ram:       Whether to run the RAM benchmark.
+    :param duration:  Duration for each benchmark (CPU/RAM).
+    :param list_size: Size of RAM list if RAM is tested.
     """
     threads = []
 
     if cpu:
-        t_cpu = threading.Thread(target=cpu_stress_test, kwargs={"duration": 10})
-        threads.append(t_cpu)
+        cpu_thread = threading.Thread(
+            target=cpu_stress_test, kwargs={"duration": duration}
+        )
+        threads.append(cpu_thread)
 
     if ram:
-        t_ram = threading.Thread(target=ram_stress_test, kwargs={"duration": 10})
-        threads.append(t_ram)
+        ram_thread = threading.Thread(
+            target=ram_stress_test,
+            kwargs={"duration": duration, "list_size": list_size},
+        )
+        threads.append(ram_thread)
 
+    # Start all benchmarks in parallel
     for t in threads:
         t.start()
 
-    # Optionally update TUI or show progress while benchmarks are running
-    if callback:
-        # Example: simple spinner or textual update
-        while any(t.is_alive() for t in threads):
-            callback()
-            time.sleep(0.5)
-
+    # Wait for all benchmarks to complete
     for t in threads:
         t.join()
 
 
-# ---------------------------
-# Textual TUI Application
-# ---------------------------
+# ------------------------------------------------------------------------------
+# Typer Commands
+# ------------------------------------------------------------------------------
 
 
-class BenchmarkMenuScreen(Screen):
+@app.command()
+def cpu(
+    duration: float = typer.Option(10.0, help="Number of seconds to stress CPU."),
+    workers: int = typer.Option(
+        None, help="Number of CPU worker threads. Defaults to CPU count."
+    ),
+):
     """
-    Main menu screen where the user can choose CPU, RAM, or BOTH.
+    Run a CPU benchmark by keeping all cores busy for the specified duration.
     """
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static("Welcome to Benchmarker! Select an option:\n", id="welcome-text")
-        # Container to hold buttons
-        with Vertical():
-            yield Button("CPU Benchmark", id="cpu")
-            yield Button("RAM Benchmark", id="ram")
-            yield Button("Both CPU & RAM", id="both")
-        yield Footer()
-
-    def on_button_pressed(self, event: Button.Pressed) -> None:
-        """
-        Handle button presses from the main menu.
-        """
-        if event.button.id == "cpu":
-            self.app.push_screen(RunBenchmarkScreen(cpu=True, ram=False))
-        elif event.button.id == "ram":
-            self.app.push_screen(RunBenchmarkScreen(cpu=False, ram=True))
-        elif event.button.id == "both":
-            self.app.push_screen(RunBenchmarkScreen(cpu=True, ram=True))
+    typer.echo(f"Starting CPU benchmark for {duration} seconds...")
+    cpu_stress_test(duration=duration, workers=workers)
+    typer.echo("CPU benchmark finished!")
 
 
-class RunBenchmarkScreen(Screen):
+@app.command()
+def ram(
+    duration: float = typer.Option(
+        10.0, help="Number of seconds to hold allocated memory."
+    ),
+    list_size: int = typer.Option(
+        10_000_000, help="Number of elements to allocate in a list."
+    ),
+):
     """
-    Screen that runs the requested benchmark(s) and displays status updates.
+    Run a RAM benchmark by allocating a large list for the specified duration.
     """
-
-    BENCHMARK_INTERVAL = 0.5  # seconds between updates
-
-    # Reactive attribute to store status
-    status_text: reactive[str] = reactive("Initializing benchmark...")
-
-    def __init__(self, cpu: bool, ram: bool):
-        super().__init__()
-        self.cpu = cpu
-        self.ram = ram
-        self.running = False
-
-    def compose(self) -> ComposeResult:
-        yield Header()
-        yield Static("Benchmark in progress...", id="benchmark-title")
-        yield Static(self.status_text, id="status")
-        yield Footer()
-
-    def on_mount(self) -> None:
-        """
-        When this screen is first mounted, start the benchmark in a background thread
-        to keep the UI responsive.
-        """
-        self.running = True
-
-        def update_callback():
-            # Called while the benchmark is running - we can update some spinner, etc.
-            self.status_text = "Running benchmark..."
-
-        def run_benchmark():
-            # Perform benchmark
-            do_benchmark(self.cpu, self.ram, callback=update_callback)
-            # Once done, update status and return to the main menu automatically
-            self.status_text = "Benchmark complete! Returning to menu..."
-            time.sleep(2.0)
-            self.app.pop_screen()
-
-        thread = threading.Thread(target=run_benchmark, daemon=True)
-        thread.start()
+    mb_estimate = list_size * (
+        24 / 1_000_000
+    )  # rough estimate; each int can be ~24 bytes in CPython
+    typer.echo(
+        f"Starting RAM benchmark. Allocating ~{mb_estimate:.2f} MB for {duration} seconds..."
+    )
+    ram_stress_test(duration=duration, list_size=list_size)
+    typer.echo("RAM benchmark finished!")
 
 
-class BenchmarkerApp(App):
+@app.command()
+def both(
+    duration: float = typer.Option(
+        10.0, help="Number of seconds to stress CPU and hold allocated memory."
+    ),
+    list_size: int = typer.Option(
+        10_000_000, help="Number of elements to allocate in a list."
+    ),
+):
     """
-    Main App class to manage the TUI for Benchmarker.
+    Run both CPU and RAM benchmarks in parallel for the specified duration.
     """
-
-    CSS_PATH = None  # You can specify a .css file for styling if desired
-    BINDINGS = [
-        ("ctrl+c", "quit", "Exit Benchmarker"),
-    ]
-
-    def on_mount(self) -> None:
-        """
-        Called after the app has initialized and is ready to display content.
-        We push the main menu screen here.
-        """
-        self.push_screen(BenchmarkMenuScreen())
+    mb_estimate = list_size * (24 / 1_000_000)  # rough estimate
+    typer.echo(f"Starting BOTH CPU & RAM benchmark...")
+    typer.echo(f"  • CPU for {duration} seconds")
+    typer.echo(f"  • RAM (~{mb_estimate:.2f} MB) for {duration} seconds")
+    do_benchmark(cpu=True, ram=True, duration=duration, list_size=list_size)
+    typer.echo("CPU & RAM benchmark finished!")
 
 
-def main():
+# ------------------------------------------------------------------------------
+# Interactive Menu
+# ------------------------------------------------------------------------------
+
+
+def interactive_menu():
     """
-    Main entry point for the Benchmarker TUI.
+    Presents the user with a simple text-based menu to select which benchmark to run.
     """
-    app = BenchmarkerApp()
-    app.run()
+    typer.echo("Welcome to Benchmarker! Please select an option:")
+    typer.echo("  1) CPU Benchmark")
+    typer.echo("  2) RAM Benchmark")
+    typer.echo("  3) Both CPU & RAM")
+    typer.echo("  Q) Quit")
 
+    choice = typer.prompt("Enter your choice")
+
+    if choice.strip().lower() == "q":
+        typer.echo("Exiting...")
+        raise typer.Exit()
+
+    if choice not in ("1", "2", "3"):
+        typer.echo("Invalid choice. Please try again.")
+        return interactive_menu()
+
+    # Prompt for optional duration
+    duration = typer.prompt("Enter benchmark duration in seconds", default="10.0")
+    try:
+        duration = float(duration)
+    except ValueError:
+        typer.echo("Invalid duration. Using default: 10.0.")
+        duration = 10.0
+
+    # If user selects RAM or both, optionally ask for list size
+    list_size = 10_000_000
+    if choice in ("2", "3"):
+        try:
+            list_size_input = typer.prompt(
+                "Enter list size for RAM test", default="10000000"
+            )
+            list_size = int(list_size_input)
+        except ValueError:
+            typer.echo("Invalid list size. Using default: 10000000.")
+            list_size = 10_000_000
+
+    # Run the chosen benchmark
+    if choice == "1":
+        typer.echo(f"Running CPU benchmark for {duration} seconds...")
+        do_benchmark(cpu=True, ram=False, duration=duration)
+    elif choice == "2":
+        typer.echo(
+            f"Running RAM benchmark (list_size={list_size}) for {duration} seconds..."
+        )
+        do_benchmark(cpu=False, ram=True, duration=duration, list_size=list_size)
+    else:  # '3'
+        typer.echo(
+            f"Running BOTH CPU & RAM for {duration} seconds, list_size={list_size}..."
+        )
+        do_benchmark(cpu=True, ram=True, duration=duration, list_size=list_size)
+
+    typer.echo("Benchmark complete!")
+
+
+@app.callback(invoke_without_command=True)
+def main(ctx: typer.Context):
+    """
+    If no subcommand is provided, this function will show an interactive menu.
+    """
+    if ctx.invoked_subcommand is None:
+        try:
+            interactive_menu()
+        except KeyboardInterrupt:
+            typer.echo("\nInterrupted by user. Exiting...")
+            raise typer.Exit()
+
+
+# ------------------------------------------------------------------------------
+# Entry Point
+# ------------------------------------------------------------------------------
 
 if __name__ == "__main__":
-    sys.exit(main())
+    # If desired, exit code from app can be used or simply called directly
+    sys.exit(app(prog_name="benchmarker"))

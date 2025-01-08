@@ -1,46 +1,78 @@
+#!/usr/bin/env python3
+"""
+A simple subpage scraper implemented as a Typer CLI application.
+
+Usage:
+    1. Install dependencies:
+       pip install requests beautifulsoup4 typer[all]
+
+    2. Run the CLI:
+       python scraper.py
+
+    3. Follow the on-screen prompt to enter a URL and begin scraping.
+
+This script demonstrates:
+- Basic HTTP GET requests with `requests`
+- HTML parsing with `BeautifulSoup`
+- Logging and error handling
+- Interactive command-line interface with `Typer`
+- Concurrency using `asyncio.to_thread`
+"""
+
 import logging
 import requests
 import asyncio
+import typer
 
-from urllib.parse import urljoin, urlparse
+from typing import List
+from urllib.parse import urlparse, urljoin
 from bs4 import BeautifulSoup
 
-from textual.app import App, ComposeResult
-from textual.containers import Container
-from textual.widgets import (
-    Header,
-    Footer,
-    Static,
-    Button,
-    Input,
-    ListView,
-    ListItem,
-    Label,
-    LoadingIndicator,
-)
+###############################################################################
+# Logging Configuration
+###############################################################################
 
 logging.basicConfig(
-    level=logging.INFO, format="[%(levelname)s] %(asctime)s - %(message)s"
+    level=logging.INFO,
+    format="[%(levelname)s] %(asctime)s - %(message)s",
+    datefmt="%Y-%m-%d %H:%M:%S",
 )
 
+###############################################################################
+# Scraping Logic
+###############################################################################
 
-def scrape_subpages(url: str) -> list[str]:
+
+def scrape_subpages(url: str) -> List[str]:
+    """
+    Given a URL, retrieve the HTML content and extract all unique subpages
+    belonging to the same domain (base URL).
+
+    Args:
+        url (str): The target URL to scrape.
+
+    Returns:
+        List[str]: A sorted list of absolute URLs referencing subpages.
+    """
     logging.info("Starting subpage discovery for URL: %s", url)
+
     try:
         response = requests.get(url, timeout=10)
         response.raise_for_status()
-    except requests.exceptions.RequestException as e:
-        logging.error("Request failed: %s", e)
-        raise ValueError(f"Failed to retrieve content from {url}") from e
+    except requests.exceptions.RequestException as exc:
+        logging.error("Request failed: %s", exc)
+        raise ValueError(f"Failed to retrieve content from {url}") from exc
 
     soup = BeautifulSoup(response.text, "html.parser")
     subpages = set()
     base_domain = urlparse(url).netloc
 
     for link_tag in soup.find_all("a", href=True):
-        href = link_tag["href"]
+        href = link_tag["href"].strip()
+        # Convert relative path to absolute URL
         if href.startswith("/"):
             absolute_url = urljoin(url, href)
+            # Only include links from the same domain
             if urlparse(absolute_url).netloc == base_domain:
                 subpages.add(absolute_url)
 
@@ -48,109 +80,49 @@ def scrape_subpages(url: str) -> list[str]:
     return sorted(subpages)
 
 
-class ScraperApp(App):
-    CSS = """
-    Screen {
-        layout: vertical;
-    }
+###############################################################################
+# Typer CLI Application
+###############################################################################
 
-    #controls {
-        layout: horizontal;
-        height: auto;
-        padding: 1 2;
-    }
+app = typer.Typer(help="A CLI for scraping subpages from a given URL.")
 
-    #results-panel {
-        layout: vertical;
-        padding: 1 2;
-        border: solid $accent-darken-3;
-    }
 
-    #results-list {
-        height: 1fr;
-        overflow-y: auto;
-        border: solid $accent-darken-3;
-    }
-
-    #status {
-        padding: 1;
-        color: green;
-    }
-
-    /* Minimal Input styling */
-    Input {
-        color: black;
-        background: white;
-        border: none;
-    }
+@app.command(name="scrape", help="Scrape subpages for a single URL.")
+def scrape_command():
     """
+    Prompt the user for a URL, scrape the subpages, and display the results.
+    """
+    url = typer.prompt("Please enter a URL (e.g., https://example.com)")
 
-    def compose(self) -> ComposeResult:
-        yield Header(show_clock=True)
-        yield Container(
-            Static("Enter URL:", id="prompt-label"),
-            Input(placeholder="https://example.com", id="url_input"),
-            Button("Scrape", id="scrape_button"),
-            id="controls",
+    # Strip and basic validation
+    url = url.strip()
+    if not url:
+        typer.secho("Error: Invalid URL provided.", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    typer.echo(f"Scraping subpages from: {url}")
+    # Use asyncio.to_thread to mirror the async scraping approach in the original
+    try:
+        subpages: List[str] = asyncio.run(asyncio.to_thread(scrape_subpages, url))
+    except ValueError as exc:
+        typer.secho(f"Error: {exc}", fg=typer.colors.RED, err=True)
+        raise typer.Exit(code=1)
+
+    if subpages:
+        typer.secho(
+            f"Success: Found {len(subpages)} subpage(s).", fg=typer.colors.GREEN
         )
-        yield Container(
-            Static("Discovered Subpages:", id="results-label"),
-            ListView(id="results-list"),
-            id="results-panel",
-        )
-        yield Static("Idle", id="status")
-        yield Footer()
-
-    def on_ready(self) -> None:
-        self.status = self.query_one("#status", Static)
-        self.url_input = self.query_one("#url_input", Input)
-        self.results_list = self.query_one("#results-list", ListView)
-        self.url_input.focus()
-
-    async def on_button_pressed(self, event: Button.Pressed) -> None:
-        if event.button.id == "scrape_button":
-            await self._start_scraping()
-
-    async def on_input_submitted(self, event: Input.Submitted) -> None:
-        if event.input.id == "url_input":
-            await self._start_scraping()
-
-    async def _start_scraping(self) -> None:
-        url = self.url_input.value.strip()
-        if not url:
-            await self._update_status("[red]Error: Please provide a valid URL.")
-            return
-
-        self.results_list.clear()
-        loading_item = ListItem(LoadingIndicator())
-        self.results_list.append(loading_item)
-
-        await self._update_status(f"Scraping {url} ...")
-        self.refresh()
-
-        try:
-            subpages = await asyncio.to_thread(scrape_subpages, url)
-            self.results_list.clear()
-
-            if subpages:
-                for idx, sp in enumerate(subpages, start=1):
-                    self.results_list.append(ListItem(Label(f"{idx}. {sp}")))
-                await self._update_status(
-                    f"[green]Success: Found {len(subpages)} subpages."
-                )
-            else:
-                await self._update_status("[yellow]No subpages found.")
-        except ValueError as e:
-            self.results_list.clear()
-            await self._update_status(f"[red]Error: {e}")
-
-    async def _update_status(self, message: str) -> None:
-        self.status.update(message)
-        self.refresh()
+        for index, page in enumerate(subpages, start=1):
+            typer.echo(f"{index}. {page}")
+    else:
+        typer.secho("No subpages found.", fg=typer.colors.YELLOW)
 
 
-def main() -> None:
-    ScraperApp().run()
+def main():
+    """
+    Entrypoint to the Typer CLI. Invokes Typer's application runner.
+    """
+    app()
 
 
 if __name__ == "__main__":
