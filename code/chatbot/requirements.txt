@@ -1,0 +1,7 @@
+fastapi
+uvicorn
+python-dotenv
+openai
+websockets
+prompt_toolkit
+requests
