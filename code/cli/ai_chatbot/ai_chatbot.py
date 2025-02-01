@@ -1,4 +1,3 @@
-#!/usr/bin/env python3
 import os
 import sys
 import logging
@@ -10,8 +9,12 @@ from rich.console import Console
 from rich.prompt import Prompt
 from rich.theme import Theme
 from rich.panel import Panel
+from rich.markdown import Markdown
+from rich.live import Live
 
-# Define a Nord-inspired Rich theme.
+# -----------------------------------------------------------------------------
+# Rich Console Setup with a Nord-inspired Theme and fixed width for consistent wrapping
+# -----------------------------------------------------------------------------
 nord_theme = Theme(
     {
         "bot": "#81A1C1",  # nord9
@@ -22,7 +25,8 @@ nord_theme = Theme(
         "error": "#BF616A",  # nord11
     }
 )
-console = Console(theme=nord_theme)
+# Optionally, set a fixed width (e.g., 100 characters) for predictable wrapping.
+console = Console(theme=nord_theme, width=100)
 
 
 # -----------------------------------------------------------------------------
@@ -30,8 +34,8 @@ console = Console(theme=nord_theme)
 # -----------------------------------------------------------------------------
 def setup_logger() -> logging.Logger:
     """
-    Set up and return a logger that writes detailed chat session logs
-    to 'chat_history.log' in the same directory as this script.
+    Set up and return a logger that writes detailed chat session logs to 'chat_history.log'
+    using a rotating file handler.
     """
     script_dir = os.path.dirname(os.path.abspath(__file__))
     log_file = os.path.join(script_dir, "chat_history.log")
@@ -39,19 +43,15 @@ def setup_logger() -> logging.Logger:
     logger = logging.getLogger("chat_history")
     logger.setLevel(logging.DEBUG)
 
-    # Use a rotating file handler (max 5 MB per file, keep 3 backups)
-    handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)
-    handler.setLevel(logging.DEBUG)
-
-    formatter = logging.Formatter(
-        "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-    )
-    handler.setFormatter(formatter)
-
-    # Avoid adding multiple handlers if setup_logger is called more than once.
-    if not logger.hasHandlers():
+    # Avoid duplicate handlers
+    if not logger.handlers:
+        handler = RotatingFileHandler(log_file, maxBytes=5 * 1024 * 1024, backupCount=3)
+        handler.setLevel(logging.DEBUG)
+        formatter = logging.Formatter(
+            "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+        )
+        handler.setFormatter(formatter)
         logger.addHandler(handler)
-
     return logger
 
 
@@ -68,7 +68,7 @@ if not OPENAI_API_KEY:
     logger.error("OPENAI_API_KEY not found in environment. Exiting.")
     sys.exit(1)
 
-# NOTE: Adjust the import or client instantiation as per your OpenAI library version.
+# Import and instantiate the OpenAI client.
 try:
     from openai import OpenAI  # Using the new client-based import.
 except ImportError as e:
@@ -155,8 +155,7 @@ chatbots = [
 # -----------------------------------------------------------------------------
 def select_chatbot() -> Dict[str, Any]:
     """
-    Display a menu of available chatbots and return the configuration
-    for the selected bot.
+    Display a menu of available chatbots and return the configuration for the selected bot.
     """
     console.print(Panel("[info]Select a Chatbot:[/info]", expand=False))
     for idx, bot in enumerate(chatbots, start=1):
@@ -180,8 +179,9 @@ def select_chatbot() -> Dict[str, Any]:
 
 def chat_session(bot_config: Dict[str, Any]) -> None:
     """
-    Start a chat session with the selected chatbot. All messages (system, user,
-    and assistant) are logged.
+    Start a chat session with the selected chatbot. All messages (system, user, and assistant)
+    are logged. Assistant responses are rendered using a Live Markdown view to ensure that
+    text is wrapped nicely without splitting words mid-word.
     """
     session_start = f"=== Chat session started with {bot_config['name']} ==="
     console.print(Panel(f"[system]{session_start}[/system]", expand=False))
@@ -202,31 +202,39 @@ def chat_session(bot_config: Dict[str, Any]) -> None:
             messages.append({"role": "user", "content": user_input})
             logger.info("User: %s", user_input)
 
-            # Inform the user that the assistant is typing.
-            console.print("[bot]Assistant:[/bot] ", end="", style="bot")
+            # Notify the user that the assistant is generating a response.
+            console.print("[bot]Assistant:[/bot]")
+
             response_text = ""
+            # Use Live to update the Markdown-rendered text as tokens are received.
+            with Live(
+                Markdown(response_text), console=console, refresh_per_second=10
+            ) as live:
+                try:
+                    # Create a streaming completion.
+                    response = client.chat.completions.create(
+                        model="gpt-4o-mini",
+                        messages=messages,
+                        stream=True,
+                    )
+                    # Process tokens as they are received.
+                    for chunk in response:
+                        token = (
+                            chunk.choices[0].delta.content
+                            if hasattr(chunk.choices[0].delta, "content")
+                            else ""
+                        )
+                        if token:
+                            response_text += token
+                            # Update the live Markdown view.
+                            live.update(Markdown(response_text))
+                except Exception as api_exc:
+                    error_message = f"Error during API call: {api_exc}"
+                    console.print(f"\n[error]{error_message}[/error]")
+                    logger.exception(error_message)
+                    continue
 
-            try:
-                # Use the client-instance API for streaming.
-                response = client.chat.completions.create(
-                    model="chatgpt-4o-latest",
-                    messages=messages,
-                    stream=True,
-                )
-                # Stream tokens as they are generated.
-                for chunk in response:
-                    token = chunk.choices[0].delta.get("content")
-                    if token:
-                        response_text += token
-                        console.print(token, end="", style="bot", soft_wrap=True)
-                console.print()  # Newline after the streamed response.
-            except Exception as e:
-                error_message = f"Error during API call: {e}"
-                console.print(f"\n[error]{error_message}[/error]")
-                logger.exception(error_message)
-                continue
-
-            # Append assistant's full reply to the conversation history.
+            # Log and save the complete assistant reply.
             messages.append({"role": "assistant", "content": response_text})
             logger.info("Assistant: %s", response_text)
         except KeyboardInterrupt:
@@ -246,8 +254,8 @@ def chat_session(bot_config: Dict[str, Any]) -> None:
 # -----------------------------------------------------------------------------
 def main() -> None:
     """
-    Main function that drives the chatbot CLI application. Allows users to
-    choose between chatbots and start new sessions until they choose to exit.
+    Main function that drives the chatbot CLI application. It allows users to select
+    between chatbots and start new chat sessions until they choose to exit.
     """
     console.print(Panel("[info]Welcome to the AI Chatbot CLI App[/info]", expand=False))
     logger.info("Displayed welcome message to user.")
