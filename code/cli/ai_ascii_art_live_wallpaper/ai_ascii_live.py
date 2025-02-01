@@ -9,13 +9,7 @@ from rich.console import Console
 from rich.theme import Theme
 
 load_dotenv()
-nord_theme = Theme(
-    {
-        "info": "#88C0D0",
-        "warning": "#EBCB8B",
-        "error": "#BF616A",
-    }
-)
+nord_theme = Theme({"info": "#88C0D0", "warning": "#EBCB8B", "error": "#BF616A"})
 console = Console(theme=nord_theme, width=100)
 
 
@@ -68,7 +62,6 @@ def get_random_ascii_prompt():
         "'Generate an abstract ASCII art depiction of a dreamlike landscape'. "
         "Output only the prompt text with no additional commentary or confirmation."
     )
-
     try:
         with console.status(
             "[bold green]Generating art prompt...[/bold green]", spinner="dots"
@@ -80,7 +73,7 @@ def get_random_ascii_prompt():
             )
     except Exception as e:
         logger.exception("Error generating ASCII art prompt")
-        return "Create a cyberpunk hacker-themed ASCII art image"
+        return "Create a surreal ASCII art image"
     ascii_prompt = response.choices[0].message.content or ""
     return ascii_prompt.strip()
 
@@ -119,7 +112,8 @@ def main():
             art = get_ascii_art(final_prompt)
             logger.info("ASCII art generated (truncated): %s", art[:100])
             print_ascii_art(art)
-            time.sleep(6)
+            with console.status("[bold green]Loading...[/bold green]", spinner="dots"):
+                time.sleep(10)
         except KeyboardInterrupt:
             console.print("\n[info]Exiting...[/info]")
             logger.info("Application terminated by KeyboardInterrupt.")
