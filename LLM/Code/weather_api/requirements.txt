@@ -1,4 +1,0 @@
-typer
-requests
-python-dotenv
-rich
