@@ -1,14 +1,13 @@
 # Random ASCII Art Generator
 
-Random ASCII Art Generator is a command-line interface (CLI) application that continuously creates unique, tech-themed ASCII art images using OpenAI's API. It leverages the [Rich](https://github.com/Textualize/rich) library to render stylish output with a smooth drop-down animation effect.
+Random ASCII Art Generator is a command-line interface (CLI) application that continuously creates unique ASCII art images using OpenAI's API. The app prints the generated art to the terminal and then displays a loading spinner with a "Loading..." message below the art for 10 seconds before generating the next piece. The entire process runs automatically until interrupted.
 
 ## Features
 
-- **Tech-Themed ASCII Art**: Generates art inspired by modern IT, cybersecurity, hacker culture, and futuristic digital aesthetics.
-- **Live CLI Output**: Displays the generated ASCII art with an eye-catching drop-down animation.
-- **Automatic Generation**: Runs continuously without user input until interrupted (Ctrl+C).
-- **Loading Spinners**: Shows engaging loading animations while waiting for API responses.
-- **Robust Logging**: Logs detailed information using a rotating file handler for easy debugging.
+- **Unique ASCII Art**: Generates creative ASCII art images with complete artistic freedom.
+- **Loading Indicator**: Displays a dynamic loading spinner and message beneath the art during a 10-second pause.
+- **Continuous Operation**: Runs in an endless loop without requiring any user input.
+- **Production-Grade Code**: Includes robust error handling, detailed logging, and a polished CLI interface using the [Rich](https://github.com/Textualize/rich) library.
 
 ## Prerequisites
 
@@ -20,7 +19,7 @@ Random ASCII Art Generator is a command-line interface (CLI) application that co
 1. **Clone the Repository**
 
    ```bash
-   git clone https://github.com/yourusername/random-ascii-art-generator.git
+   git clone https://github.com/dunamismax/random-ascii-art-generator.git
    cd random-ascii-art-generator
    ```
 
@@ -37,7 +36,7 @@ Random ASCII Art Generator is a command-line interface (CLI) application that co
    pip install -r requirements.txt
    ```
 
-   Ensure your `requirements.txt` contains:
+   Ensure your `requirements.txt` includes:
 
    ```bash
    openai
@@ -45,7 +44,7 @@ Random ASCII Art Generator is a command-line interface (CLI) application that co
    rich
    ```
 
-4. **Set Up Your OpenAI API Key**
+4. **Configure Your OpenAI API Key**
 
    Create a `.env` file in the project root with the following content:
 
@@ -61,22 +60,12 @@ Run the application with:
 python ai_ascii_art.py
 ```
 
-The app will continuously generate tech-themed ASCII art until you press `Ctrl+C` to exit.
-
-## Configuration
-
-- **API Model**: The code uses `chatgpt-4o-latest` by default. Modify this in the source code if needed.
-- **Display Duration**: Each generated ASCII art is shown for 6 seconds before the next one appears.
-- **Logging**: Detailed logs are written to `chat_history.log` in the project directory.
+The app will continuously generate and display random ASCII art images with a loading spinner until you press `Ctrl+C` to exit.
 
 ## Contributing
 
-Contributions are welcome! Please open issues or submit pull requests with improvements, bug fixes, or new features.
+Contributions are welcome! Feel free to open issues or submit pull requests. For any questions or suggestions, contact me at [dunamismax@tutamail.com](mailto:dunamismax@tutamail.com).
 
 ## License
 
 This project is licensed under the MIT License. See the [LICENSE](LICENSE) file for details.
-
-## Disclaimer
-
-This project uses the OpenAI API, which may incur costs. Monitor your usage and adhere to OpenAI's terms of service.
