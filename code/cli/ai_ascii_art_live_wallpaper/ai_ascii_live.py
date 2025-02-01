@@ -113,7 +113,7 @@ def main():
             logger.info("ASCII art generated (truncated): %s", art[:100])
             print_ascii_art(art)
             with console.status("[bold green]Loading...[/bold green]", spinner="dots"):
-                time.sleep(10)
+                time.sleep(5)
         except KeyboardInterrupt:
             console.print("\n[info]Exiting...[/info]")
             logger.info("Application terminated by KeyboardInterrupt.")

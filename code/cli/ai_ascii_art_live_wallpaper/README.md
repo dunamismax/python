@@ -5,7 +5,7 @@ Random ASCII Art Generator is a command-line interface (CLI) application that co
 ## Features
 
 - **Unique ASCII Art**: Generates creative ASCII art images with complete artistic freedom.
-- **Loading Indicator**: Displays a dynamic loading spinner and message beneath the art during a 10-second pause.
+- **Loading Indicator**: Displays a dynamic loading spinner and message beneath the art during a 5-second pause.
 - **Continuous Operation**: Runs in an endless loop without requiring any user input.
 - **Production-Grade Code**: Includes robust error handling, detailed logging, and a polished CLI interface using the [Rich](https://github.com/Textualize/rich) library.
 
