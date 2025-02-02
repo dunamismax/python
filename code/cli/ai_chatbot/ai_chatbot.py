@@ -1,11 +1,8 @@
-# -----------------------------------------------------------------------------
-# Initial Imports and Console Setup
-# -----------------------------------------------------------------------------
 import os
-import sys
+import json
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import Dict, Any
+from typing import Dict, List
 
 from dotenv import load_dotenv
 from rich.console import Console
@@ -14,130 +11,15 @@ from rich.theme import Theme
 from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.live import Live
+from rich.table import Table
+from rich.box import ROUNDED
+from openai import OpenAI, APIError, APIConnectionError
 
 # -----------------------------------------------------------------------------
-# Rich Console Setup with a Nord-inspired Theme
+# Configuration
 # -----------------------------------------------------------------------------
-nord_theme = Theme(
-    {
-        "bot": "#81A1C1",  # nord9  - Blue
-        "user": "#A3BE8C",  # nord14 - Green
-        "system": "#8FBCBB",  # nord7  - Cyan
-        "info": "#88C0D0",  # nord8  - Light Blue
-        "warning": "#EBCB8B",  # nord13 - Yellow
-        "error": "#BF616A",  # nord11 - Red
-        "prompt": "#5E81AC",  # nord10 - Darker Blue
-    }
-)
-console = Console(theme=nord_theme, width=100)
-
-
-# -----------------------------------------------------------------------------
-# Logging Setup and Initialization
-# -----------------------------------------------------------------------------
-def setup_logger() -> logging.Logger:
-    """
-    Set up and return a logger that writes detailed chat session logs to 'chat_history.log'
-    using a rotating file handler with custom formatting for chat messages.
-    """
-    script_dir = os.path.dirname(os.path.abspath(__file__))
-    log_file = os.path.join(script_dir, "chat_history.log")
-
-    # Create a custom formatter that handles different message types
-    class ChatFormatter(logging.Formatter):
-        def __init__(self):
-            super().__init__()
-            # Standard format for system messages
-            self.system_fmt = "%(asctime)s [SYSTEM] %(message)s"
-            # Format for user messages
-            self.user_fmt = """
-%(asctime)s [USER]
-%(message)s
---------------------------------------------------"""
-            # Format for assistant messages
-            self.assistant_fmt = """
-%(asctime)s [ASSISTANT]
-%(message)s
-=================================================="""
-            # Format for other messages
-            self.default_fmt = "%(asctime)s [%(levelname)s] %(message)s"
-
-        def format(self, record):
-            format_orig = self._style._fmt
-            if "role" in record.__dict__:
-                if record.role == "user":
-                    self._style._fmt = self.user_fmt
-                elif record.role == "assistant":
-                    self._style._fmt = self.assistant_fmt
-                elif record.role == "system":
-                    self._style._fmt = self.system_fmt
-                else:
-                    self._style._fmt = self.default_fmt
-            else:
-                self._style._fmt = self.default_fmt
-            result = logging.Formatter.format(self, record)
-            self._style._fmt = format_orig
-            return result
-
-    logger = logging.getLogger("chat_history")
-    logger.setLevel(logging.DEBUG)
-
-    # Avoid duplicate handlers
-    if not logger.handlers:
-        handler = RotatingFileHandler(
-            log_file, maxBytes=5 * 1024 * 1024, backupCount=3, encoding="utf-8"  # 5MB
-        )
-        handler.setLevel(logging.DEBUG)
-        handler.setFormatter(ChatFormatter())
-        logger.addHandler(handler)
-
-    return logger
-
-
-# Initialize the logger immediately
-logger = setup_logger()
-logger.info("=== Application started ===")
-
-
-def log_message(logger: logging.Logger, role: str, content: str) -> None:
-    """Log a chat message with the appropriate formatting based on its role."""
-    record = logging.LogRecord(
-        name=logger.name,
-        level=logging.INFO,
-        pathname="",
-        lineno=0,
-        msg=content,
-        args=(),
-        exc_info=None,
-    )
-    record.role = role
-    logger.handle(record)
-
-
-# -----------------------------------------------------------------------------
-# Load Environment Variables and Initialize OpenAI Client
-# -----------------------------------------------------------------------------
-load_dotenv()
-OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
-if not OPENAI_API_KEY:
-    console.print("[error]Error: OPENAI_API_KEY not found in environment.[/error]")
-    logger.error("OPENAI_API_KEY not found in environment. Exiting.")
-    sys.exit(1)
-
-# Import and instantiate the OpenAI client.
-try:
-    from openai import OpenAI  # Using the new client-based import.
-except ImportError as e:
-    console.print(f"[error]Error importing OpenAI client: {e}[/error]")
-    logger.exception("Error importing OpenAI client")
-    sys.exit(1)
-
-try:
-    client = OpenAI(api_key=OPENAI_API_KEY)
-except Exception as e:
-    console.print(f"[error]Failed to instantiate OpenAI client: {e}[/error]")
-    logger.exception("Failed to instantiate OpenAI client")
-    sys.exit(1)
+MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
+LOG_BACKUP_COUNT = 3
 
 # -----------------------------------------------------------------------------
 # Chatbot Configurations
@@ -195,168 +77,234 @@ chatbots = [
 
 
 # -----------------------------------------------------------------------------
-# Chatbot Selection and Session Management
+# Rich Console Setup with Enhanced Nord Theme
 # -----------------------------------------------------------------------------
-def select_chatbot() -> Dict[str, Any]:
-    """
-    Display a menu of available chatbots and return the configuration for the selected bot.
-    """
-    try:
-        console.print(Panel("[info]Select a Chatbot:[/info]", expand=False))
-        for idx, bot in enumerate(chatbots, start=1):
-            console.print(f"[info]{idx}. {bot['name']}[/info]")
+nord_theme = Theme(
+    {
+        "title": "#88C0D0 bold",  # Nord Frost 2 (bold)
+        "bot": "#88C0D0",  # Nord Frost 2
+        "user": "#A3BE8C bold",  # Nord Aurora Green (bold)
+        "system": "#81A1C1",  # Nord Frost 1
+        "info": "#5E81AC bold",  # Nord Frost 0 (bold)
+        "warning": "#EBCB8B bold",  # Nord Aurora Yellow (bold)
+        "error": "#BF616A bold",  # Nord Aurora Red (bold)
+        "prompt": "#D8DEE9 bold",  # Nord Snow Storm (bold)
+        "highlight": "#B48EAD bold",  # Nord Aurora Purple (bold)
+        "muted": "#4C566A",  # Nord Polar Night
+    }
+)
 
-        while True:
-            try:
-                choice = Prompt.ask(
-                    "[user]Enter the number of the chatbot (or 'q' to quit)[/prompt]"
-                )
-                if choice.lower() in {"q", "quit", "exit"}:
-                    logger.info("User exited from chatbot selection.")
-                    sys.exit(0)
-                if choice.isdigit():
-                    index = int(choice)
-                    if 1 <= index <= len(chatbots):
-                        selected_bot = chatbots[index - 1]
-                        logger.info("User selected chatbot: %s", selected_bot["name"])
-                        return selected_bot
-                console.print("[warning]Invalid selection. Please try again.[/warning]")
-            except KeyboardInterrupt:
-                print()  # Add a newline for cleaner output
-                logger.info("KeyboardInterrupt during chatbot selection.")
-                raise  # Re-raise to be caught by the outer try-except
-
-    except KeyboardInterrupt:
-        console.print("\n[info]Exiting application...[/info]")
-        logger.info("Application terminated by user (KeyboardInterrupt)")
-        sys.exit(0)
+console = Console(theme=nord_theme, width=100)
 
 
-def chat_session(bot_config: Dict[str, Any]) -> None:
-    """
-    Start a chat session with the selected chatbot. All messages are logged with clear formatting.
-    """
-    session_start = f"=== Chat session started with {bot_config['name']} ==="
-    console.print(Panel(f"[system]{session_start}[/system]", expand=False))
-    log_message(logger, "system", session_start)
+# -----------------------------------------------------------------------------
+# Logging Setup
+# -----------------------------------------------------------------------------
+def setup_logger() -> logging.Logger:
+    """Configure JSON logging with rotation."""
 
-    # Initialize conversation with the system prompt
+    class JSONFormatter(logging.Formatter):
+        def format(self, record: logging.LogRecord) -> str:
+            log_data = {
+                "timestamp": self.formatTime(record, self.datefmt),
+                "role": getattr(record, "role", "system"),
+                "level": record.levelname,
+                "message": record.getMessage(),
+            }
+            return json.dumps(log_data, indent=2)
+
+    logger = logging.getLogger("chat_history")
+    logger.setLevel(logging.DEBUG)
+
+    if not logger.handlers:
+        handler = RotatingFileHandler(
+            "chat_history.log",
+            maxBytes=MAX_LOG_SIZE,
+            backupCount=LOG_BACKUP_COUNT,
+            encoding="utf-8",
+        )
+        handler.setFormatter(JSONFormatter())
+        logger.addHandler(handler)
+
+    return logger
+
+
+logger = setup_logger()
+
+
+# -----------------------------------------------------------------------------
+# Chat Commands
+# -----------------------------------------------------------------------------
+def handle_command(
+    command: str, messages: List[Dict[str, str]], bot_config: Dict[str, str]
+) -> bool:
+    """Process chat commands."""
+    cmd = command.strip().lower()
+
+    if cmd == "/exit":
+        console.print("[info]Exiting chat session...[/info]")
+        return False
+
+    elif cmd == "/help":
+        help_table = Table(box=ROUNDED, show_header=False, padding=(0, 2))
+        help_table.add_column(style="prompt")
+        help_table.add_column(style="muted")
+        help_table.add_row("/help", "Show commands")
+        help_table.add_row("/exit", "End session")
+        help_table.add_row("/reset", "Clear conversation")
+        help_table.add_row("/save", "Save chat history")
+        console.print(
+            Panel(
+                help_table,
+                title="[title]Available Commands[/title]",
+                border_style="prompt",
+            )
+        )
+
+    elif cmd == "/reset":
+        messages.clear()
+        messages.append({"role": "system", "content": bot_config["system_prompt"]})
+        console.print("[info]Conversation reset[/info]")
+
+    elif cmd == "/save":
+        try:
+            with open("chat_history.md", "w", encoding="utf-8") as f:
+                f.write(f"# Chat with {bot_config['name']}\n\n")
+                for msg in messages:
+                    if msg["role"] == "user":
+                        f.write(f"**You**: {msg['content']}\n\n")
+                    elif msg["role"] == "assistant":
+                        f.write(f"**Assistant**: {msg['content']}\n\n")
+            console.print("[info]Chat history saved[/info]")
+        except Exception as e:
+            console.print(f"[error]Save failed: {e}[/error]")
+
+    else:
+        console.print(f"[warning]Unknown command: {cmd}[/warning]")
+
+    return True
+
+
+# -----------------------------------------------------------------------------
+# Chat Session
+# -----------------------------------------------------------------------------
+def chat_session(bot_config: Dict[str, str]) -> None:
+    """Manage chat session with selected bot."""
+    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
     messages = [{"role": "system", "content": bot_config["system_prompt"]}]
-    log_message(logger, "system", f"System Prompt: {bot_config['system_prompt']}")
+    logger.info("Starting chat session", extra={"role": "system"})
+
+    console.print("\n[info]Type /help to see available commands[/info]\n")
 
     while True:
         try:
-            user_input = Prompt.ask("[user]You[/prompt]")
-            if user_input.lower() in {"exit", "quit"}:
-                console.print("[info]Exiting chat session...[/info]")
-                log_message(logger, "system", "User terminated the chat session.")
-                break
+            user_input = Prompt.ask("\n[user]You[/user]")
+
+            if user_input.startswith("/"):
+                if not handle_command(user_input, messages, bot_config):
+                    break
+                continue
 
             messages.append({"role": "user", "content": user_input})
-            log_message(logger, "user", user_input)
-
-            # Notify user that assistant is generating a response
-            console.print("[bot]Assistant:[/bot]")
+            logger.info(user_input, extra={"role": "user"})
 
             response_text = ""
-            with Live(
-                Markdown(response_text), console=console, refresh_per_second=10
-            ) as live:
+            with Live(console=console, refresh_per_second=12) as live:
                 try:
                     response = client.chat.completions.create(
-                        model="chatgpt-4o-latest",
-                        messages=messages,
-                        stream=True,
+                        model="gpt-4", messages=messages, stream=True
                     )
+
                     for chunk in response:
-                        token = (
-                            chunk.choices[0].delta.content
-                            if hasattr(chunk.choices[0].delta, "content")
-                            else ""
-                        )
-                        if token:
+                        if token := chunk.choices[0].delta.content:
                             response_text += token
                             live.update(Markdown(response_text))
-                except Exception as api_exc:
-                    error_message = f"Error during API call: {api_exc}"
-                    console.print(f"\n[error]{error_message}[/error]")
-                    logger.exception(error_message)
+
+                except APIConnectionError as e:
+                    console.print(f"[error]Connection error: {e}[/error]")
                     continue
 
-            # Log and save the complete assistant reply
             messages.append({"role": "assistant", "content": response_text})
-            log_message(logger, "assistant", response_text)
+            logger.info(response_text, extra={"role": "assistant"})
 
         except KeyboardInterrupt:
-            console.print("\n[info]Chat session terminated by user.[/info]")
-            log_message(
-                logger, "system", "Chat session terminated by KeyboardInterrupt."
-            )
-            break
-        except Exception as ex:
-            console.print(f"\n[error]Unexpected error: {ex}[/error]")
-            logger.exception("Unexpected error in chat session")
+            console.print("\n[info]Session interrupted[/info]")
             break
 
-    log_message(
-        logger, "system", f"=== Chat session ended with {bot_config['name']} ==="
+
+# -----------------------------------------------------------------------------
+# Bot Selection
+# -----------------------------------------------------------------------------
+def select_chatbot() -> Dict[str, str]:
+    """Display bot selection menu."""
+    console.clear()
+    console.print()
+    console.print("[title]AI Terminal[/title]")
+    console.print("[muted]Choose your AI assistant[/muted]\n")
+
+    # Create selection table
+    table = Table(
+        show_header=False, box=ROUNDED, expand=False, border_style="bot", padding=(0, 2)
     )
 
+    table.add_column(style="muted", width=4)  # For numbers
+    table.add_column(style="highlight")  # For names
 
-# -----------------------------------------------------------------------------
-# Main Application Loop
-# -----------------------------------------------------------------------------
-def main() -> None:
-    """
-    Main function that drives the chatbot CLI application. It allows users to select
-    between chatbots and start new chat sessions until they choose to exit.
-    """
-    try:
-        console.print(
-            Panel("[info]Welcome to the AI Chatbot CLI App[/info]", expand=False)
+    for i, bot in enumerate(chatbots, 1):
+        table.add_row(f"{i}", bot["name"])
+
+    console.print(table)
+    console.print()
+
+    while True:
+        choice = Prompt.ask(
+            "[prompt]Select AI assistant (1-3)[/prompt]",
+            console=console,
+            show_choices=False,
         )
-        logger.info("Displayed welcome message to user.")
 
-        while True:
-            try:
-                bot_config = select_chatbot()
-                chat_session(bot_config)
+        if choice.isdigit() and 0 < int(choice) <= len(chatbots):
+            return chatbots[int(choice) - 1]
 
-                cont = Prompt.ask(
-                    "[info]Do you want to choose another chatbot? (y/n)[/prompt]",
+        console.print("[warning]Please enter a valid number (1-3)[/warning]")
+
+
+# -----------------------------------------------------------------------------
+# Main Application
+# -----------------------------------------------------------------------------
+def main():
+    """Run the chatbot application."""
+    load_dotenv()
+
+    while True:
+        try:
+            bot = select_chatbot()
+            console.clear()
+            console.print(f"\n[title]Chat with {bot['name']}[/title]")
+            console.print("[muted]Start chatting below[/muted]\n")
+            chat_session(bot)
+
+            if (
+                Prompt.ask(
+                    "\n[prompt]Start new chat?[/prompt]",
+                    choices=["y", "n"],
                     default="y",
+                    show_default=True,
+                    show_choices=True,
                 )
-                if cont.lower() not in {"y", "yes"}:
-                    console.print("[info]Goodbye![/info]")
-                    logger.info("User exited the application.")
-                    break
-
-            except KeyboardInterrupt:
-                print()  # Add a newline for cleaner output
-                console.print("[info]Gracefully shutting down...[/info]")
-                logger.info("Application terminated by user (KeyboardInterrupt)")
-                break
-            except Exception as e:
-                console.print(f"[error]An error occurred: {e}[/error]")
-                logger.exception("Error in main application loop")
+                == "n"
+            ):
                 break
 
-    except Exception as e:
-        console.print(f"[error]A fatal error occurred: {e}[/error]")
-        logger.exception("A fatal error occurred in the main loop")
-    finally:
-        logger.info("=== Application terminated ===")
+        except KeyboardInterrupt:
+            console.print("\n[info]Goodbye![/info]")
+            break
+        except Exception as e:
+            console.print(f"[error]Error: {e}[/error]")
+            logger.error(str(e), exc_info=True)
+            break
 
 
 if __name__ == "__main__":
-    try:
-        main()
-    except KeyboardInterrupt:
-        print()  # Add a newline for cleaner output
-        console.print("\n[info]Application terminated by user.[/info]")
-        logger.info("Application terminated by KeyboardInterrupt")
-    except Exception as e:
-        console.print(f"[error]A fatal error occurred: {e}[/error]")
-        logger.exception("A fatal error occurred in the main loop")
-    finally:
-        logger.info("=== Application terminated ===")
+    main()
+    logger.info("Application closed", extra={"role": "system"})
