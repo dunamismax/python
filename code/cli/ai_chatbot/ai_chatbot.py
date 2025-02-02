@@ -3,18 +3,16 @@ import json
 import time
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import Dict, List, Optional
+from typing import Dict, List
 
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.theme import Theme
-from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.live import Live
 from rich.table import Table
 from rich.box import ROUNDED
 from rich.prompt import Prompt
-from rich.status import Status
 
 from openai import OpenAI, APIError, APIConnectionError
 
@@ -32,7 +30,6 @@ if not OPENAI_API_KEY:
 # Logging Configuration
 MAX_LOG_SIZE = int(os.getenv("MAX_LOG_SIZE", str(10 * 1024 * 1024)))  # 10MB default
 LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "3"))
-
 
 # -----------------------------------------------------------------------------
 # Chatbot Configurations
@@ -94,9 +91,9 @@ CHATBOTS = [
 # -----------------------------------------------------------------------------
 nord_theme = Theme(
     {
-        "title": "#88C0D0 bold",
-        "bot": "#88C0D0",
-        "user": "#A3BE8C bold",
+        "title": "#88C0D0 bold",  # Used on main menu titles
+        "bot": "#88C0D0",  # Assistant's label color
+        "user": "#A3BE8C bold",  # User's label color
         "system": "#81A1C1",
         "info": "#5E81AC bold",
         "warning": "#EBCB8B bold",
@@ -135,7 +132,6 @@ def setup_markdown_logger() -> logging.Logger:
     if not logger.handlers:
         os.makedirs("logs", exist_ok=True)
         log_path = "logs/chat_history.md"
-        # If file does not exist or is empty, initialize it with a header.
         if not os.path.exists(log_path) or os.path.getsize(log_path) == 0:
             with open(log_path, "w", encoding="utf-8") as f:
                 f.write("# Chat History Log\n\n")
@@ -161,18 +157,20 @@ logger = setup_markdown_logger()
 def get_ai_response(client: OpenAI, messages: List[Dict[str, str]]) -> str:
     """
     Get a streaming response from the OpenAI API.
-    Uses a Rich Live panel to display response progress.
+    Streams the response into a Live Markdown area (without any spinner)
+    and then returns the complete text.
     """
     response_text = ""
     try:
-        with Live(console=console, refresh_per_second=12) as live, Status("[info]Assistant is formulating a response...[/info]", spinner="dots"):
+        # Use a transient Live context to stream the Markdown response
+        with Live(
+            Markdown(""), console=console, refresh_per_second=12, transient=True
+        ) as live:
             response = client.chat.completions.create(
-                model=DEFAULT_MODEL,
-                messages=messages,
-                stream=True
+                model=DEFAULT_MODEL, messages=messages, stream=True
             )
             for chunk in response:
-                # Instead of using .get, we safely retrieve the 'content' attribute
+                # Safely extract token content from the response delta
                 delta = chunk.choices[0].delta
                 token = getattr(delta, "content", None)
                 if token:
@@ -201,7 +199,6 @@ def handle_command(
     if cmd == "/exit":
         console.print("[info]Exiting chat session...[/info]")
         return False
-
     elif cmd == "/help":
         help_table = Table(box=ROUNDED, show_header=False, padding=(0, 2))
         help_table.add_column(style="prompt")
@@ -210,19 +207,11 @@ def handle_command(
         help_table.add_row("/exit", "End chat session")
         help_table.add_row("/reset", "Clear conversation history")
         help_table.add_row("/save", "Save chat history to file")
-        console.print(
-            Panel(
-                help_table,
-                title="[title]Available Commands[/title]",
-                border_style="prompt",
-            )
-        )
-
+        console.print(help_table)
     elif cmd == "/reset":
         messages.clear()
         messages.append({"role": "system", "content": bot_config["system_prompt"]})
         console.print("[info]Conversation reset.[/info]")
-
     elif cmd == "/save":
         try:
             with open("logs/chat_history_saved.md", "w", encoding="utf-8") as f:
@@ -237,10 +226,8 @@ def handle_command(
             console.print("[info]Chat history saved.[/info]")
         except Exception as e:
             console.print(f"[error]Save failed: {e}[/error]")
-
     else:
         console.print(f"[warning]Unknown command: {cmd}[/warning]")
-
     return True
 
 
@@ -250,7 +237,7 @@ def handle_command(
 def chat_session(bot_config: Dict[str, str]) -> None:
     """
     Manages a chat session with the selected AI assistant.
-    Commands: /exit, /help, /reset, /save.
+    Supports the commands: /exit, /help, /reset, /save.
     """
     client = OpenAI(api_key=OPENAI_API_KEY)
     messages: List[Dict[str, str]] = [
@@ -262,27 +249,21 @@ def chat_session(bot_config: Dict[str, str]) -> None:
     while True:
         try:
             user_input = Prompt.ask("\n[user]You[/user]")
-            # Process commands (starting with '/')
             if user_input.startswith("/"):
                 if not handle_command(user_input, messages, bot_config):
                     break
                 continue
 
+            # Display the user's message using the theme colors
+            console.print(f"[user]You:[/user] {user_input}")
             messages.append({"role": "user", "content": user_input})
             logger.info(user_input, extra={"role": "user"})
 
-            # Get AI response and display it
+            # Get and stream the AI's response (without extra borders)
             assistant_response = get_ai_response(client, messages)
             messages.append({"role": "assistant", "content": assistant_response})
             logger.info(assistant_response, extra={"role": "assistant"})
-
-            panel = Panel(
-                assistant_response,
-                title=f"[bot]{bot_config['name']}[/bot]",
-                subtitle=f"[muted]{time.strftime('%H:%M:%S')}[/muted]",
-                border_style="bot",
-            )
-            console.print(panel)
+            console.print(f"[bot]{bot_config['name']}:[/bot] {assistant_response}")
 
         except KeyboardInterrupt:
             console.print("\n[info]Session interrupted by user.[/info]")
@@ -299,6 +280,7 @@ def chat_session(bot_config: Dict[str, str]) -> None:
 def select_chatbot() -> Dict[str, str]:
     """
     Presents a selection menu to choose an AI assistant.
+    The main menu (bot selection) uses a bordered Panel.
     """
     console.clear()
     console.print("\n[title]AI Terminal Chat[/title]")
@@ -307,8 +289,8 @@ def select_chatbot() -> Dict[str, str]:
     table = Table(
         show_header=False, box=ROUNDED, expand=False, border_style="bot", padding=(0, 2)
     )
-    table.add_column(style="muted", width=4)  # For numbering
-    table.add_column(style="highlight")  # For bot names
+    table.add_column(style="muted", width=4)
+    table.add_column(style="highlight")
 
     for i, bot in enumerate(CHATBOTS, 1):
         table.add_row(f"{i}", bot["name"])
@@ -316,9 +298,7 @@ def select_chatbot() -> Dict[str, str]:
     console.print()
 
     while True:
-        choice = Prompt.ask(
-            "[prompt]Select AI assistant (1-{})[/prompt]".format(len(CHATBOTS))
-        )
+        choice = Prompt.ask(f"[prompt]Select AI assistant (1-{len(CHATBOTS)})[/prompt]")
         if choice.isdigit() and 1 <= int(choice) <= len(CHATBOTS):
             return CHATBOTS[int(choice) - 1]
         console.print("[warning]Please enter a valid number.[/warning]")
@@ -339,7 +319,6 @@ def main():
             console.print(f"\n[title]Chat with {bot['name']}[/title]")
             console.print("[muted]Start chatting below[/muted]\n")
             chat_session(bot)
-
             new_chat = Prompt.ask(
                 "\n[prompt]Start new chat? (y/n)[/prompt]",
                 choices=["y", "n"],
