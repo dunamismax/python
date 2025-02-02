@@ -1,30 +1,43 @@
 import os
 import json
+import time
 import logging
 from logging.handlers import RotatingFileHandler
-from typing import Dict, List
+from typing import Dict, List, Optional
 
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.prompt import Prompt
 from rich.theme import Theme
 from rich.panel import Panel
 from rich.markdown import Markdown
 from rich.live import Live
 from rich.table import Table
 from rich.box import ROUNDED
+from rich.prompt import Prompt
+from rich.status import Status
+
 from openai import OpenAI, APIError, APIConnectionError
 
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-MAX_LOG_SIZE = 10 * 1024 * 1024  # 10MB
-LOG_BACKUP_COUNT = 3
+load_dotenv()
+
+# OpenAI Configuration
+DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "chatgpt-4o-latest")
+OPENAI_API_KEY = os.getenv("OPENAI_API_KEY")
+if not OPENAI_API_KEY:
+    raise ValueError("OPENAI_API_KEY environment variable is not set")
+
+# Logging Configuration
+MAX_LOG_SIZE = int(os.getenv("MAX_LOG_SIZE", str(10 * 1024 * 1024)))  # 10MB default
+LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "3"))
+
 
 # -----------------------------------------------------------------------------
 # Chatbot Configurations
 # -----------------------------------------------------------------------------
-chatbots = [
+CHATBOTS = [
     {
         "name": "System Administrator",
         "system_prompt": "You are the Linux Unix Sysadmin Wizard an AI with unparalleled expertise in Linux and Unix systems administration infrastructure design problem solving knowledge spanning decades rooted in Unix philosophy mastering every layer stack cloud native orchestration prioritizing stability security and performance precise professional technical accuracy clear communication attention to detail empathetic pedagogical anticipating user knowledge gaps explaining concepts step by step using analogies demystifying complex topics proactive security minded highlighting best practices potential risks hardening techniques prioritizing safety calm under pressure senior sysadmin troubleshooting critical outages philosophically grounded advocating Unix principles embracing modern tooling staying in character veteran sysadmin citing authoritative sources prioritizing safety caution suggesting dry runs backups sanity checks explaining solutions teaching why they work including examples commands config snippets scripts being distribution agnostic acknowledging differences focusing on universal principles guarding confidentiality never disclosing sensitive data demonstrating unparalleled skill comprehensive system mastery kernel OS internals process management filesystems memory allocation system calls shell wizardry idiomatic Bash Zsh scripting pipes redirection POSIX compliance networking expertise configuring iptables nftables troubleshooting TCP IP DNS HTTP SSH tunnels security hardening firewalls SELinux AppArmor intrusion detection least privilege principles infrastructure as code designing Ansible playbooks Terraform modules Kubernetes manifests CI CD pipelines optimizing GitLab CI GitHub Actions Jenkins workflows monitoring logging architecting Prometheus Grafana ELK Stack systemd journald methodical diagnostics using strace dmesg tcpdump perf isolating issues performance tuning resolving memory leaks IO bottlenecks CPU contention htop vmstat iostat forensic analysis recovering corrupted filesystems interpreting kernel panics analyzing core dumps explaining Unix legacy Bell Labs BSD POSIX standards open source ethos advocating FOSS principles pragmatically addressing enterprise needs integrating modern ecosystem cloud native fluency deploying scalable workloads AWS GCP Azure Kubernetes serverless frameworks containerization mastering Docker images orchestrating Podman Docker Compose version control proficiency resolving git merge conflicts designing branching strategies leveraging hooks writing maintainable code emphasizing readability idempotency defensive scripting crafting clear concise documentation runbooks READMEs incident postmortems mentoring junior admins simulating pair debugging sessions encouraging curiosity systematic thinking empowering users mastering Linux Unix systems fostering self reliance security efficiency demystifying complexity breaking down intimidating concepts logical approachable steps championing best practices promoting reproducibility automation auditability preventing disasters warning against cargo cult commands encouraging understanding bridging theory and practice connecting commands to underlying systems explaining how ls interacts VFS layer delivering actionable solutions providing commands code configs ready for implementation flagging risks noting potential pitfalls ensuring acceptable downtime staying current with modern tools respecting legacy systems guarding secrets never exposing API keys passwords internal IPs sanitizing examples encouraging exploration inspiring users using man pages help flags experimenting in safe environments serving as the Linux Unix Sysadmin Wizard guardian of uptime teacher of CLI enforcer of best practices and guidance navigating systems with confidence and precision deeply respecting the Unix way",
@@ -77,70 +90,114 @@ chatbots = [
 
 
 # -----------------------------------------------------------------------------
-# Rich Console Setup with Enhanced Nord Theme
+# Rich Console Setup with Nord Theme
 # -----------------------------------------------------------------------------
 nord_theme = Theme(
     {
-        "title": "#88C0D0 bold",  # Nord Frost 2 (bold)
-        "bot": "#88C0D0",  # Nord Frost 2
-        "user": "#A3BE8C bold",  # Nord Aurora Green (bold)
-        "system": "#81A1C1",  # Nord Frost 1
-        "info": "#5E81AC bold",  # Nord Frost 0 (bold)
-        "warning": "#EBCB8B bold",  # Nord Aurora Yellow (bold)
-        "error": "#BF616A bold",  # Nord Aurora Red (bold)
-        "prompt": "#D8DEE9 bold",  # Nord Snow Storm (bold)
-        "highlight": "#B48EAD bold",  # Nord Aurora Purple (bold)
-        "muted": "#4C566A",  # Nord Polar Night
+        "title": "#88C0D0 bold",
+        "bot": "#88C0D0",
+        "user": "#A3BE8C bold",
+        "system": "#81A1C1",
+        "info": "#5E81AC bold",
+        "warning": "#EBCB8B bold",
+        "error": "#BF616A bold",
+        "prompt": "#D8DEE9 bold",
+        "highlight": "#B48EAD bold",
+        "muted": "#4C566A",
     }
 )
-
 console = Console(theme=nord_theme, width=100)
 
 
 # -----------------------------------------------------------------------------
-# Logging Setup
+# Markdown Logger Setup
 # -----------------------------------------------------------------------------
-def setup_logger() -> logging.Logger:
-    """Configure JSON logging with rotation."""
+def setup_markdown_logger() -> logging.Logger:
+    """Configure markdown logging with timestamps and role-based formatting."""
 
-    class JSONFormatter(logging.Formatter):
+    class MarkdownFormatter(logging.Formatter):
         def format(self, record: logging.LogRecord) -> str:
-            log_data = {
-                "timestamp": self.formatTime(record, self.datefmt),
-                "role": getattr(record, "role", "system"),
-                "level": record.levelname,
-                "message": record.getMessage(),
-            }
-            return json.dumps(log_data, indent=2)
+            timestamp = self.formatTime(record, datefmt="%Y-%m-%d %H:%M:%S")
+            role = getattr(record, "role", "system")
+            message = (record.getMessage() or "").strip()
+            if role == "system":
+                return f"\n### {timestamp} - System Message\n{message}\n"
+            elif role == "user":
+                return f"\n#### {timestamp} - User\n{message}\n"
+            elif role == "assistant":
+                return f"\n#### {timestamp} - Assistant\n{message}\n"
+            else:
+                return f"\n#### {timestamp} - {role}\n{message}\n"
 
     logger = logging.getLogger("chat_history")
-    logger.setLevel(logging.DEBUG)
+    logger.setLevel(logging.INFO)
 
     if not logger.handlers:
+        os.makedirs("logs", exist_ok=True)
+        log_path = "logs/chat_history.md"
+        # If file does not exist or is empty, initialize it with a header.
+        if not os.path.exists(log_path) or os.path.getsize(log_path) == 0:
+            with open(log_path, "w", encoding="utf-8") as f:
+                f.write("# Chat History Log\n\n")
+                f.write("*Chat session logs for the AI assistant conversation.*\n\n")
+                f.write("---\n")
         handler = RotatingFileHandler(
-            "chat_history.log",
+            log_path,
             maxBytes=MAX_LOG_SIZE,
             backupCount=LOG_BACKUP_COUNT,
             encoding="utf-8",
         )
-        handler.setFormatter(JSONFormatter())
+        handler.setFormatter(MarkdownFormatter())
         logger.addHandler(handler)
-
     return logger
 
 
-logger = setup_logger()
+logger = setup_markdown_logger()
 
 
 # -----------------------------------------------------------------------------
-# Chat Commands
+# OpenAI API Helper
+# -----------------------------------------------------------------------------
+def get_ai_response(client: OpenAI, messages: List[Dict[str, str]]) -> str:
+    """
+    Get a streaming response from the OpenAI API.
+    Uses a Rich Live panel to display response progress.
+    """
+    response_text = ""
+    try:
+        with Live(console=console, refresh_per_second=12) as live, Status("[info]Assistant is formulating a response...[/info]", spinner="dots"):
+            response = client.chat.completions.create(
+                model=DEFAULT_MODEL,
+                messages=messages,
+                stream=True
+            )
+            for chunk in response:
+                # Instead of using .get, we safely retrieve the 'content' attribute
+                delta = chunk.choices[0].delta
+                token = getattr(delta, "content", None)
+                if token:
+                    response_text += token
+                    live.update(Markdown(response_text))
+        return response_text.strip() or "I'm not sure how to respond to that."
+    except (APIError, APIConnectionError) as e:
+        console.print(f"[error]API error: {e}[/error]")
+        return "I encountered an API error. Please try again later."
+    except Exception as e:
+        console.print(f"[error]Unexpected error: {e}[/error]")
+        return "An unexpected error occurred while generating a response."
+
+
+# -----------------------------------------------------------------------------
+# Command Handling
 # -----------------------------------------------------------------------------
 def handle_command(
     command: str, messages: List[Dict[str, str]], bot_config: Dict[str, str]
 ) -> bool:
-    """Process chat commands."""
+    """
+    Process chat commands.
+    Returns False if the command indicates an exit, True otherwise.
+    """
     cmd = command.strip().lower()
-
     if cmd == "/exit":
         console.print("[info]Exiting chat session...[/info]")
         return False
@@ -149,10 +206,10 @@ def handle_command(
         help_table = Table(box=ROUNDED, show_header=False, padding=(0, 2))
         help_table.add_column(style="prompt")
         help_table.add_column(style="muted")
-        help_table.add_row("/help", "Show commands")
-        help_table.add_row("/exit", "End session")
-        help_table.add_row("/reset", "Clear conversation")
-        help_table.add_row("/save", "Save chat history")
+        help_table.add_row("/help", "Show available commands")
+        help_table.add_row("/exit", "End chat session")
+        help_table.add_row("/reset", "Clear conversation history")
+        help_table.add_row("/save", "Save chat history to file")
         console.print(
             Panel(
                 help_table,
@@ -164,18 +221,20 @@ def handle_command(
     elif cmd == "/reset":
         messages.clear()
         messages.append({"role": "system", "content": bot_config["system_prompt"]})
-        console.print("[info]Conversation reset[/info]")
+        console.print("[info]Conversation reset.[/info]")
 
     elif cmd == "/save":
         try:
-            with open("chat_history.md", "w", encoding="utf-8") as f:
+            with open("logs/chat_history_saved.md", "w", encoding="utf-8") as f:
                 f.write(f"# Chat with {bot_config['name']}\n\n")
                 for msg in messages:
                     if msg["role"] == "user":
                         f.write(f"**You**: {msg['content']}\n\n")
                     elif msg["role"] == "assistant":
                         f.write(f"**Assistant**: {msg['content']}\n\n")
-            console.print("[info]Chat history saved[/info]")
+                    else:
+                        f.write(f"**System**: {msg['content']}\n\n")
+            console.print("[info]Chat history saved.[/info]")
         except Exception as e:
             console.print(f"[error]Save failed: {e}[/error]")
 
@@ -186,20 +245,24 @@ def handle_command(
 
 
 # -----------------------------------------------------------------------------
-# Chat Session
+# Chat Session Management
 # -----------------------------------------------------------------------------
 def chat_session(bot_config: Dict[str, str]) -> None:
-    """Manage chat session with selected bot."""
-    client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
-    messages = [{"role": "system", "content": bot_config["system_prompt"]}]
+    """
+    Manages a chat session with the selected AI assistant.
+    Commands: /exit, /help, /reset, /save.
+    """
+    client = OpenAI(api_key=OPENAI_API_KEY)
+    messages: List[Dict[str, str]] = [
+        {"role": "system", "content": bot_config["system_prompt"]}
+    ]
     logger.info("Starting chat session", extra={"role": "system"})
 
-    console.print("\n[info]Type /help to see available commands[/info]\n")
-
+    console.print("\n[info]Type /help to see available commands.[/info]\n")
     while True:
         try:
             user_input = Prompt.ask("\n[user]You[/user]")
-
+            # Process commands (starting with '/')
             if user_input.startswith("/"):
                 if not handle_command(user_input, messages, bot_config):
                     break
@@ -208,74 +271,67 @@ def chat_session(bot_config: Dict[str, str]) -> None:
             messages.append({"role": "user", "content": user_input})
             logger.info(user_input, extra={"role": "user"})
 
-            response_text = ""
-            with Live(console=console, refresh_per_second=12) as live:
-                try:
-                    response = client.chat.completions.create(
-                        model="gpt-4", messages=messages, stream=True
-                    )
+            # Get AI response and display it
+            assistant_response = get_ai_response(client, messages)
+            messages.append({"role": "assistant", "content": assistant_response})
+            logger.info(assistant_response, extra={"role": "assistant"})
 
-                    for chunk in response:
-                        if token := chunk.choices[0].delta.content:
-                            response_text += token
-                            live.update(Markdown(response_text))
-
-                except APIConnectionError as e:
-                    console.print(f"[error]Connection error: {e}[/error]")
-                    continue
-
-            messages.append({"role": "assistant", "content": response_text})
-            logger.info(response_text, extra={"role": "assistant"})
+            panel = Panel(
+                assistant_response,
+                title=f"[bot]{bot_config['name']}[/bot]",
+                subtitle=f"[muted]{time.strftime('%H:%M:%S')}[/muted]",
+                border_style="bot",
+            )
+            console.print(panel)
 
         except KeyboardInterrupt:
-            console.print("\n[info]Session interrupted[/info]")
+            console.print("\n[info]Session interrupted by user.[/info]")
+            break
+        except Exception as e:
+            console.print(f"[error]Error: {e}[/error]")
+            logger.error(str(e), exc_info=True)
             break
 
 
 # -----------------------------------------------------------------------------
-# Bot Selection
+# Bot Selection Menu
 # -----------------------------------------------------------------------------
 def select_chatbot() -> Dict[str, str]:
-    """Display bot selection menu."""
+    """
+    Presents a selection menu to choose an AI assistant.
+    """
     console.clear()
-    console.print()
-    console.print("[title]AI Terminal[/title]")
-    console.print("[muted]Choose your AI assistant[/muted]\n")
+    console.print("\n[title]AI Terminal Chat[/title]")
+    console.print("[muted]Choose your AI assistant:[/muted]\n")
 
-    # Create selection table
     table = Table(
         show_header=False, box=ROUNDED, expand=False, border_style="bot", padding=(0, 2)
     )
+    table.add_column(style="muted", width=4)  # For numbering
+    table.add_column(style="highlight")  # For bot names
 
-    table.add_column(style="muted", width=4)  # For numbers
-    table.add_column(style="highlight")  # For names
-
-    for i, bot in enumerate(chatbots, 1):
+    for i, bot in enumerate(CHATBOTS, 1):
         table.add_row(f"{i}", bot["name"])
-
     console.print(table)
     console.print()
 
     while True:
         choice = Prompt.ask(
-            "[prompt]Select AI assistant (1-3)[/prompt]",
-            console=console,
-            show_choices=False,
+            "[prompt]Select AI assistant (1-{})[/prompt]".format(len(CHATBOTS))
         )
-
-        if choice.isdigit() and 0 < int(choice) <= len(chatbots):
-            return chatbots[int(choice) - 1]
-
-        console.print("[warning]Please enter a valid number (1-3)[/warning]")
+        if choice.isdigit() and 1 <= int(choice) <= len(CHATBOTS):
+            return CHATBOTS[int(choice) - 1]
+        console.print("[warning]Please enter a valid number.[/warning]")
 
 
 # -----------------------------------------------------------------------------
-# Main Application
+# Main Application Loop
 # -----------------------------------------------------------------------------
 def main():
-    """Run the chatbot application."""
-    load_dotenv()
-
+    """
+    Main loop for the chatbot application.
+    Allows users to select an assistant and start a chat session.
+    """
     while True:
         try:
             bot = select_chatbot()
@@ -284,27 +340,23 @@ def main():
             console.print("[muted]Start chatting below[/muted]\n")
             chat_session(bot)
 
-            if (
-                Prompt.ask(
-                    "\n[prompt]Start new chat?[/prompt]",
-                    choices=["y", "n"],
-                    default="y",
-                    show_default=True,
-                    show_choices=True,
-                )
-                == "n"
-            ):
+            new_chat = Prompt.ask(
+                "\n[prompt]Start new chat? (y/n)[/prompt]",
+                choices=["y", "n"],
+                default="y",
+            )
+            if new_chat.lower() != "y":
                 break
-
         except KeyboardInterrupt:
             console.print("\n[info]Goodbye![/info]")
             break
         except Exception as e:
-            console.print(f"[error]Error: {e}[/error]")
+            console.print(f"[error]Critical error: {e}[/error]")
             logger.error(str(e), exc_info=True)
             break
+
+    logger.info("Application closed", extra={"role": "system"})
 
 
 if __name__ == "__main__":
     main()
-    logger.info("Application closed", extra={"role": "system"})
