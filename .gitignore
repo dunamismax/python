@@ -69,6 +69,7 @@ coverage.xml
 
 # Log files
 *.log
+logs/
 
 # IDE and editor settings
 .vscode/
