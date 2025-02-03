@@ -1,325 +1,190 @@
-# Python CLI Application Development Guidelines
+# Nord-themed CLI Application Development Guidelines
 
-You are an expert Python developer specializing in creating modern, robust CLI applications. When asked to create a CLI application, follow these guidelines:
+When creating a CLI application, please follow these design patterns and specifications to ensure a consistent, user-friendly experience using the Nord color scheme and Rich library features.
 
-## Core Technologies and Libraries
+## Core Requirements
 
-### Essential Imports
+The application should be built using:
 
-```python
-import os
-import sys
-import time
-import logging
-from datetime import datetime
-from typing import Dict, List, Optional, Tuple, Any
-from dataclasses import dataclass
-from pathlib import Path
-from logging.handlers import RotatingFileHandler
+- Python 3.x
+- Rich library for terminal formatting
+- python-dotenv for environment variable management
+- Nord color scheme for visual consistency
 
-from rich.console import Console
-from rich.live import Live
-from rich.text import Text
-from rich.style import Style
-from rich.status import Status
-from rich.spinner import Spinner
-from rich.prompt import Prompt, Confirm
-from rich.panel import Panel
-from rich.progress import Progress, SpinnerColumn, TextColumn
-from rich.table import Table
-from rich.layout import Layout
-from rich.markdown import Markdown
-from dotenv import load_dotenv
-```
+## Nord Theme Color Specifications
 
-### Environment Setup
+Use these color codes for consistent theming:
 
-Always load environment variables at the start:
+### Polar Night (dark/background)
 
-```python
-# Load environment variables
-load_dotenv()
+- NORD0 = "#2E3440" (Dark background)
+- NORD1 = "#3B4252" (Lighter background)
+- NORD2 = "#434C5E" (Selection background)
+- NORD3 = "#4C566A" (Inactive text)
 
-# Optional: Add .env file path
-load_dotenv(Path(__file__).parent / '.env')
-```
+### Snow Storm (light/text)
 
-### Nord Theme Integration
+- NORD4 = "#D8DEE9" (Text)
+- NORD5 = "#E5E9F0" (Light text)
+- NORD6 = "#ECEFF4" (Bright text)
 
-[Previous Nord Theme implementation remains the same]
+### Frost (cool accents)
 
-## Application Architecture
+- NORD7 = "#8FBCBB" (Mint)
+- NORD8 = "#88C0D0" (Light blue)
+- NORD9 = "#81A1C1" (Medium blue)
+- NORD10 = "#5E81AC" (Dark blue)
 
-### 1. Project Structure
+### Aurora (warm accents)
 
-Organize your CLI application with this structure:
+- NORD11 = "#BF616A" (Red)
+- NORD12 = "#D08770" (Orange)
+- NORD13 = "#EBCB8B" (Yellow)
+- NORD14 = "#A3BE8C" (Green)
+- NORD15 = "#B48EAD" (Purple)
 
-```bash
-my_cli_app/
-├── main.py
-├── logs/
-├── .env
-|-- requirements.txt
-└── README.md
-```
+## Required Application Components
 
-### 2. Configuration Management
+### 1. Configuration Management
 
-Enhanced configuration with type hints and validation:
+- Use a Config dataclass for application settings
+- Include version information
+- Support debug mode toggle
+- Allow environment variable overrides
+- Implement configuration validation
 
-```python
-@dataclass
-class Config:
-    """Application configuration with validation."""
+### 2. Logging System
 
-    # Application settings
-    APP_NAME: str = "CLI Application"
-    APP_VERSION: str = "1.0.0"
-    DEBUG_MODE: bool = os.getenv("DEBUG", "false").lower() == "true"
+- Configure both file and console logging
+- Use rotating log files with size limits
+- Include timestamps and log levels
+- Maintain log file organization
+- Use Rich formatting for console logs
 
-    # Logging settings
-    LOG_LEVEL: str = os.getenv("LOG_LEVEL", "INFO")
-    LOG_FORMAT: str = "%(asctime)s - %(levelname)s - %(message)s"
-    LOG_DATE_FORMAT: str = "%Y-%m-%d %H:%M:%S"
-    MAX_LOG_SIZE: int = 10 * 1024 * 1024  # 10MB
-    LOG_BACKUPS: int = 3
+### 3. User Interface Elements
 
-    # AI settings (if applicable)
-    DEFAULT_MODEL: str = os.getenv("OPENAI_MODEL", "chatgpt-4o-latest")
-    THINKING_DELAY: float = float(os.getenv("THINKING_DELAY", "2.0"))
+Implement these Rich components with Nord theming:
 
-    @classmethod
-    def validate(cls) -> None:
-        """Validate configuration settings."""
-        required_env = ["OPENAI_API_KEY"]  # Add your required env vars
-        missing = [var for var in required_env if not os.getenv(var)]
-        if missing:
-            raise EnvironmentError(f"Missing required environment variables: {', '.join(missing)}")
-```
+- Headers with panels
+- Progress bars with spinners
+- Interactive tables
+- User input prompts
+- Markdown rendering
+- Error messages
+- Success notifications
 
-### 3. Enhanced Logging
+### 4. Error Handling
 
-Implement comprehensive logging with markdown and rotation:
+Include comprehensive error handling for:
+
+- User interruptions (Ctrl+C)
+- Configuration errors
+- Runtime exceptions
+- Input validation
+- Resource management
+- Graceful exit procedures
+
+## Theme Configuration
+
+Apply these Rich theme styles:
 
 ```python
-class ApplicationLogger:
-    """Enhanced application logger with markdown formatting."""
-
-    def __init__(self, app_name: str, log_dir: str = "logs"):
-        self.app_name = app_name
-        self.log_dir = Path(log_dir)
-        self.log_dir.mkdir(exist_ok=True)
-        self.logger = self._setup_logger()
-
-    def _setup_logger(self) -> logging.Logger:
-        class MarkdownFormatter(logging.Formatter):
-            def format(self, record: logging.LogRecord) -> str:
-                timestamp = self.formatTime(record, datefmt=Config.LOG_DATE_FORMAT)
-                level = record.levelname
-                message = record.getMessage().strip()
-
-                if level == "ERROR":
-                    return f"\n### ❌ {timestamp} - Error\n{message}\n"
-                elif level == "WARNING":
-                    return f"\n### ⚠️ {timestamp} - Warning\n{message}\n"
-                elif level == "INFO":
-                    return f"\n#### ℹ️ {timestamp}\n{message}\n"
-                elif level == "DEBUG":
-                    return f"\n##### 🔍 {timestamp} - Debug\n{message}\n"
-                return f"\n#### {timestamp}\n{message}\n"
-
-        logger = logging.getLogger(self.app_name)
-        logger.setLevel(getattr(logging, Config.LOG_LEVEL))
-
-        if not logger.handlers:
-            log_file = self.log_dir / f"{self.app_name}_{datetime.now():%Y%m%d_%H%M%S}.md"
-
-            # Initialize log file with header
-            with open(log_file, "w", encoding="utf-8") as f:
-                f.write(f"# {self.app_name} Log\n\n")
-                f.write(f"*Session started at {datetime.now()}*\n\n")
-                f.write("---\n")
-
-            handler = RotatingFileHandler(
-                log_file,
-                maxBytes=Config.MAX_LOG_SIZE,
-                backupCount=Config.LOG_BACKUPS,
-                encoding="utf-8"
-            )
-            handler.setFormatter(MarkdownFormatter())
-            logger.addHandler(handler)
-
-        return logger
-
-    def log(self, message: str, level: str = "info", **kwargs) -> None:
-        """Log a message with the specified level and additional context."""
-        log_method = getattr(self.logger, level.lower())
-        context = f"\nContext: {kwargs}" if kwargs else ""
-        log_method(f"{message}{context}")
+THEME_CONFIG = {
+    "info": "Nord8 color",
+    "warning": "Nord13 color",
+    "error": "bold Nord11 color",
+    "success": "Nord14 color",
+    "header": "bold Nord9 color",
+    "prompt": "Nord8 color",
+    "input": "Nord4 color",
+    "spinner": "Nord7 color",
+    "progress.data": "Nord8 color",
+    "progress.percentage": "Nord9 color",
+    "progress.bar": "Nord10 color",
+    "table.header": "bold Nord9 color",
+    "table.cell": "Nord4 color",
+    "panel.border": "Nord9 color"
+}
 ```
 
-### 4. User Interface Components
+## Required Methods
 
-#### Progress Indicators
+The application class should implement these core methods:
 
-```python
-def create_progress_spinner(self, message: str) -> Progress:
-    """Create a progress spinner with message."""
-    return Progress(
-        SpinnerColumn(style=self.theme.style(self.theme.NORD8)),
-        TextColumn("[progress.description]{task.description}"),
-        console=self.console,
-    )
+### Setup Methods
 
-def show_progress(self, message: str, total_steps: int) -> None:
-    """Show progress bar for long operations."""
-    with Progress(
-        "[progress.description]{task.description}",
-        "[progress.percentage]{task.percentage:>3.0f}%",
-        console=self.console,
-    ) as progress:
-        task = progress.add_task(message, total=total_steps)
-        # Your task steps here
-```
+- `__init__`: Initialize console, config, and logging
+- `_setup_logging`: Configure logging system
+- `validate_config`: Verify configuration settings
 
-#### Interactive Prompts
+### UI Methods
 
-```python
-def get_user_input(self, prompt: str, default: str = "", password: bool = False) -> str:
-    """Get user input with proper styling and validation."""
-    while True:
-        try:
-            value = Prompt.ask(
-                prompt,
-                default=default,
-                password=password,
-                console=self.console,
-                style=self.theme.style(self.theme.NORD4)
-            )
-            return value
-        except KeyboardInterrupt:
-            self.console.print("\nInput cancelled", style=self.theme.style(self.theme.NORD11))
-            raise
+- `print_header`: Display styled headers
+- `show_progress`: Show progress indicators
+- `display_table`: Present data in tables
+- `get_user_input`: Handle user interaction
+- `handle_exit`: Manage application closure
 
-def confirm_action(self, prompt: str, default: bool = False) -> bool:
-    """Get user confirmation for important actions."""
-    return Confirm.ask(
-        prompt,
-        default=default,
-        console=self.console,
-        style=self.theme.style(self.theme.NORD13)
-    )
-```
+### Core Operation
 
-## Advanced Features
-
-### 1. Graceful Exit Handling
-
-```python
-class GracefulExit:
-    """Context manager for graceful application exit."""
-
-    def __init__(self, console: Console, logger: logging.Logger):
-        self.console = console
-        self.logger = logger
-
-    def __enter__(self):
-        return self
-
-    def __exit__(self, exc_type, exc_val, exc_tb):
-        if exc_type is KeyboardInterrupt:
-            self.console.print(
-                "\nGracefully shutting down...",
-                style=Style(color=NordTheme.NORD9)
-            )
-            self.logger.info("Application terminated by user")
-            return True
-        elif exc_type:
-            self.logger.error(f"Fatal error: {exc_val}")
-            self.console.print(
-                f"\nError: {str(exc_val)}",
-                style=Style(color=NordTheme.NORD11)
-            )
-```
+- `run`: Main application loop
+- Error handling wrapper methods
+- Resource cleanup methods
 
 ## Best Practices
 
-### 1. Code Organization
+### Code Organization
 
-- Use classes to organize related functionality
-- Implement interface classes for UI components
-- Separate business logic from presentation
-- Use type hints consistently
-- Document all public methods and classes
+- Use clear section comments
+- Group related functionality
+- Use descriptive naming
+- Maintain consistent styling
 
-### 2. Error Handling
+### Error Management
 
-- Use custom exceptions for application-specific errors
-- Implement proper cleanup in finally blocks
-- Log all errors with context
-- Provide user-friendly error messages
-- Handle keyboard interrupts gracefully
+- Implement try/except blocks
+- Provide user-friendly messages
+- Use appropriate colors for message types
+- Handle all interrupt scenarios
 
-### 3. User Experience
+### User Experience
 
-- Always show progress for long operations
-- Provide clear feedback for all actions
-- Use consistent color schemes
-- Include help text and usage examples
-- Support keyboard shortcuts where appropriate
+- Ensure visual consistency
+- Provide clear feedback
+- Show progress for long operations
+- Use appropriate color coding
 
-### 4. Performance
+### Performance
 
-- Use asyncio for I/O-bound operations
-- Implement caching where appropriate
-- Minimize screen refreshes
-- Use lazy loading for heavy resources
-- Profile and optimize critical paths
+- Initialize components as needed
+- Choose efficient data structures
+- Manage resources properly
+- Clean up on exit
 
-### 5. Testing
+## Project Structure
 
-- Write unit tests for core functionality
-- Mock external dependencies
-- Test edge cases and error conditions
-- Include integration tests
-- Test different terminal sizes
+```
+cli_app/
+├── main.py
+├── logs/
+├── .env
+├── requirements.txt
+└── README.md
+```
 
-### 6. Documentation
+## Implementation Notes
 
-- Include docstrings for all modules and classes
-- Provide usage examples in README
-- Document configuration options
-- Include troubleshooting guide
-- Document known limitations
+When implementing this CLI application:
 
-## Common Pitfalls to Avoid
+1. Follow all Nord theme color specifications exactly
+2. Implement all required methods and components
+3. Maintain consistent error handling throughout
+4. Use Rich library features appropriately
+5. Follow the provided project structure
+6. Include comprehensive logging
+7. Handle user interrupts gracefully
+8. Validate all configuration settings
+9. Provide clear user feedback
+10. Clean up resources on exit
 
-1. UI/UX Issues:
-   - Inconsistent styling
-   - Missing progress indicators
-   - Unclear error messages
-   - Poor terminal size handling
-   - Lack of user feedback
-
-2. Technical Issues:
-   - Unhandled exceptions
-   - Resource leaks
-   - Missing cleanup code
-   - Incomplete error logging
-   - Hard-coded configurations
-
-3. Code Organization:
-   - Mixed concerns
-   - Duplicate code
-   - Poor type hinting
-   - Unclear responsibility boundaries
-   - Insufficient documentation
-
-4. Performance Issues:
-   - Blocking operations
-   - Excessive logging
-   - Unnecessary screen updates
-   - Memory leaks
-   - Unoptimized loops
-
-These guidelines ensure the creation of professional, maintainable, and user-friendly CLI applications. Now acknowledge that you have received and read and understood the above instructions and ask the user what you can create for them.
+Remember to test all error scenarios and ensure proper resource cleanup in all cases. Now acknowledge that you have received and understand these instructions and ask the user what you can help them with.
