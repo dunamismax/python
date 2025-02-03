@@ -243,7 +243,9 @@ class ChatInterface:
         )
         self.console.print()
 
-    def _stream_response(self, messages: List[Dict], model: str = "gpt-4o") -> str:
+    def _stream_response(
+        self, messages: List[Dict], model: str = "chatgpt-4o-latest"
+    ) -> str:
         """
         Stream the AI response with proper formatting using OpenAI's ChatCompletion.
         """
@@ -271,11 +273,18 @@ class ChatInterface:
         return "".join(full_response)
 
     def select_bot(self) -> Optional[Dict[str, str]]:
-        """Display the bot selection menu."""
+        """Display the bot selection menu with name and description."""
         self._print_header("Choose your AI assistant:")
         for i, bot in enumerate(CHATBOTS, 1):
+            # Bot name in a bright color
             name_text = Text(f"{i}. {bot['name']}", style=nord_style(NordColor.FROST_8))
             self.console.print(name_text)
+
+            # Bot description in a more muted (darker) Nord color
+            desc_text = Text(
+                bot["description"], style=nord_style(NordColor.POLAR_NIGHT_3)
+            )
+            self.console.print(desc_text)
 
         while True:
             try:
@@ -307,7 +316,7 @@ class ChatInterface:
         self.markdown_logger.log(f"Started chat session with {bot_config['name']}")
 
         # Updated default model name
-        model = bot_config.get("model", "gpt-4o")
+        model = bot_config.get("model", "chatgpt-4o-latest")
 
         try:
             while True:
