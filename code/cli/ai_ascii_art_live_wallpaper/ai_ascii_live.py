@@ -1,136 +1,257 @@
 #!/usr/bin/env python3
 """
-ASCII Art Generator
--------------------
-A simple ASCII art generator that uses OpenAI's GPT model to create art.
-A spinner from Rich is shown for 10 seconds (the configured pause) while the art is generated.
+Rich-based ASCII Art Generator
+-----------------------------
+A modern CLI ASCII art generator using OpenAI's GPT model with:
+- Rich UI components and styling
+- Nord color theme integration
+- Streaming responses with proper formatting
+- Automated art generation with configurable intervals
 """
 
 import os
 import sys
 import time
 import logging
+from datetime import datetime
+from typing import Optional
+from dataclasses import dataclass
 from logging.handlers import RotatingFileHandler
-from dotenv import load_dotenv
 
+from dotenv import load_dotenv
+from openai import OpenAI
 from rich.console import Console
 from rich.live import Live
+from rich.text import Text
+from rich.panel import Panel
+from rich.style import Style
+from rich.status import Status
 from rich.spinner import Spinner
-
-from openai import OpenAI
+from rich.prompt import Prompt
 
 # Load environment variables
 load_dotenv()
 
-# Configuration: pause duration (in seconds) between ASCII art generations
-GENERATION_PAUSE = 10
+
+# -----------------------------------------------------------------------------
+# Nord Color Theme Configuration
+# -----------------------------------------------------------------------------
+class NordTheme:
+    # Polar Night
+    NORD0 = "#2E3440"  # Dark bg
+    NORD1 = "#3B4252"  # Lighter bg
+    NORD2 = "#434C5E"  # Selection bg
+    NORD3 = "#4C566A"  # Inactive text
+
+    # Snow Storm
+    NORD4 = "#D8DEE9"  # Text
+    NORD5 = "#E5E9F0"  # Light text
+    NORD6 = "#ECEFF4"  # Bright text
+
+    # Frost
+    NORD7 = "#8FBCBB"  # Mint
+    NORD8 = "#88C0D0"  # Light blue
+    NORD9 = "#81A1C1"  # Medium blue
+    NORD10 = "#5E81AC"  # Dark blue
+
+    # Aurora
+    NORD11 = "#BF616A"  # Red
+    NORD12 = "#D08770"  # Orange
+    NORD13 = "#EBCB8B"  # Yellow
+    NORD14 = "#A3BE8C"  # Green
+    NORD15 = "#B48EAD"  # Purple
+
+    @classmethod
+    def style(cls, color: str, bg: str = None) -> Style:
+        if bg:
+            return Style(color=color, bgcolor=bg)
+        return Style(color=color)
+
+
+# -----------------------------------------------------------------------------
+# Configuration
+# -----------------------------------------------------------------------------
+@dataclass
+class Config:
+    DEFAULT_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4")
+    GENERATION_PAUSE: int = int(os.getenv("GENERATION_PAUSE", "10"))
+    MAX_ART_WIDTH: int = 60
+    MAX_ART_HEIGHT: int = 20
+
+    PROMPTS = [
+        "Create a detailed landscape scene with mountains and trees",
+        "Generate a portrait of a cat using ASCII characters",
+        "Design an abstract geometric pattern",
+        "Create a cityscape with buildings and clouds",
+        "Draw a sailing ship on waves",
+    ]
 
 
 class ASCIIArtGenerator:
-    """Main class for generating and displaying ASCII art."""
+    """Manages the ASCII art generation interface using Rich."""
 
     def __init__(self):
         self.console = Console()
-        self.logger = self._setup_logging()
-        self.client = self._setup_openai()
-        self.spinner = Spinner("dots", text="Generating ASCII art...")
+        self.client = OpenAI()
+        self.theme = NordTheme
+        self.setup_logging()
 
-    def _setup_logging(self) -> logging.Logger:
-        """Configure a rotating file logger."""
+    def setup_logging(self) -> None:
+        """Configure rotating file logger."""
         logger = logging.getLogger("ascii_generator")
         logger.setLevel(logging.INFO)
-        handler = RotatingFileHandler(
-            "ascii_generator.log",
-            maxBytes=5 * 1024 * 1024,
-            backupCount=3,
-            encoding="utf-8",
-        )
-        formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-        )
-        handler.setFormatter(formatter)
-        logger.addHandler(handler)
-        return logger
 
-    def _setup_openai(self) -> OpenAI:
-        """Initialize OpenAI client with error handling."""
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            self._exit_with_error("OPENAI_API_KEY not found in environment")
-        return OpenAI(api_key=api_key)
+        if not logger.handlers:
+            os.makedirs("logs", exist_ok=True)
+            log_file = f"logs/ascii_art_{datetime.now():%Y%m%d_%H%M%S}.log"
 
-    def _exit_with_error(self, message: str) -> None:
-        """Handle fatal errors and exit gracefully."""
-        self.console.print(f"Error: {message}")
-        self.logger.error(message)
-        sys.exit(1)
-
-    def _generate_art(self, prompt: str) -> str:
-        """Generate ASCII art based on a fixed prompt."""
-        try:
-            response = self.client.chat.completions.create(
-                model="chatgpt-4o-latest",
-                messages=[
-                    {
-                        "role": "system",
-                        "content": (
-                            "Create ASCII art using characters only. "
-                            "Do not include extra text or formatting markers."
-                        ),
-                    },
-                    {"role": "user", "content": f"{prompt}"},
-                ],
+            handler = RotatingFileHandler(
+                log_file,
+                maxBytes=5 * 1024 * 1024,  # 5MB
+                backupCount=3,
+                encoding="utf-8",
             )
-            # Remove any triple backticks if present and return a clean result.
-            art = response.choices[0].message.content.replace("```", "").strip()
-            return art
+            formatter = logging.Formatter(
+                "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
+            )
+            handler.setFormatter(formatter)
+            logger.addHandler(handler)
+
+        self.logger = logger
+
+    def _print_header(self) -> None:
+        """Print styled header."""
+        self.console.print()
+        self.console.print(
+            "ASCII Art Generator",
+            style=self.theme.style(self.theme.NORD8),
+            justify="center",
+        )
+        self.console.print(
+            "Press Ctrl+C to exit",
+            style=self.theme.style(self.theme.NORD3),
+            justify="center",
+        )
+        self.console.print()
+
+    def generate_art(self, prompt: str) -> str:
+        """Generate ASCII art using GPT-4."""
+        try:
+            messages = [
+                {
+                    "role": "system",
+                    "content": (
+                        "You are an ASCII art generator. Create ASCII art with these guidelines:\n"
+                        f"- Maximum width: {Config.MAX_ART_WIDTH} characters\n"
+                        f"- Maximum height: {Config.MAX_ART_HEIGHT} lines\n"
+                        "- Use only ASCII characters (no Unicode)\n"
+                        "- Focus on visual clarity and artistic detail\n"
+                        "- Provide ONLY the ASCII art itself, no comments or explanations\n"
+                        "- Do not include triple quotes in your response\n"
+                        "- Ensure consistent line lengths\n"
+                        "- Center the art horizontally"
+                    ),
+                },
+                {"role": "user", "content": prompt},
+            ]
+
+            response_text = Text()
+
+            with Status(
+                "Generating ASCII art...",
+                spinner="dots",
+                spinner_style=self.theme.style(self.theme.NORD13),
+                console=self.console,
+            ):
+                response = self.client.chat.completions.create(
+                    model=Config.DEFAULT_MODEL, messages=messages, stream=True
+                )
+
+                art = []
+                for chunk in response:
+                    if chunk.choices[0].delta.content:
+                        art.append(chunk.choices[0].delta.content)
+
+            return "".join(art).strip()
+
         except Exception as e:
             self.logger.error(f"Art generation error: {e}")
             return "Error generating art."
 
-    def _display_art(self, art: str, prompt: str) -> None:
-        """Clear the terminal and output the ASCII art along with the prompt."""
-        self.console.clear()
-        # Output the art and the prompt in a clean format.
-        self.console.print(art)
-        self.console.print(f"\nPrompt used: {prompt}")
-        # Also log the output for record keeping.
-        self.logger.info("ASCII Art generated:")
-        self.logger.info(art)
-        self.logger.info(f"Prompt: {prompt}")
+    def display_art(self, art: str, prompt: str) -> None:
+        """Display ASCII art with decorative formatting."""
+        # Format with triple quotes
+        formatted_art = f'"""\n{art}\n"""'
+
+        # Create panel with art
+        panel = Panel(
+            Text(formatted_art, style=self.theme.style(self.theme.NORD4)),
+            title="[bold]ASCII Art[/bold]",
+            subtitle=f"Prompt: {prompt}",
+            border_style=self.theme.style(self.theme.NORD8),
+            padding=(1, 2),
+        )
+
+        self.console.print(panel)
 
     def run(self) -> None:
-        """Main execution loop for generating and displaying art."""
-        self.console.print("ASCII Art Generator")
-        self.console.print("Press Ctrl+C to exit.")
-        fixed_prompt = "Create abstract ASCII art using ASCII characters only."
+        """Main execution loop."""
+        self._print_header()
+        self.logger.info("Starting ASCII art generator")
+        prompt_idx = 0
+        last_generation_time = 0
+
         try:
             while True:
-                # Show spinner for the configured pause duration
-                with Live(
-                    self.spinner,
-                    console=self.console,
-                    refresh_per_second=10,
-                    transient=True,
-                ):
-                    time.sleep(GENERATION_PAUSE)
-                # Generate art using the fixed prompt
-                art = self._generate_art(fixed_prompt)
-                self._display_art(art, fixed_prompt)
-                time.sleep(GENERATION_PAUSE)
+                current_time = time.time()
+
+                if current_time - last_generation_time >= Config.GENERATION_PAUSE:
+                    prompt = Config.PROMPTS[prompt_idx]
+                    prompt_idx = (prompt_idx + 1) % len(Config.PROMPTS)
+
+                    # Clear screen for new art
+                    self.console.clear()
+                    self._print_header()
+
+                    # Generate and display new art
+                    art = self.generate_art(prompt)
+                    self.display_art(art, prompt)
+
+                    self.logger.info(f"Generated new art with prompt: {prompt}")
+                    last_generation_time = current_time
+
+                time.sleep(0.1)  # Prevent CPU hogging
+
         except KeyboardInterrupt:
-            self.console.print("Exiting ASCII Art Generator.")
-            sys.exit(0)
+            self.console.print(
+                "\nExiting ASCII Art Generator",
+                style=self.theme.style(self.theme.NORD9),
+                justify="center",
+            )
+            self.logger.info("Generator stopped by user")
 
 
 def main():
+    """Entry point with error handling."""
+    if not os.getenv("OPENAI_API_KEY"):
+        console = Console()
+        console.print(
+            "Error: OPENAI_API_KEY environment variable not set",
+            style=Style(color=NordTheme.NORD11),
+        )
+        sys.exit(1)
+
+    generator = ASCIIArtGenerator()
     try:
-        generator = ASCIIArtGenerator()
         generator.run()
     except Exception as e:
-        Console().print(f"Fatal error: {str(e)}")
-        logging.getLogger("ascii_generator").exception("Fatal error occurred")
+        generator.console.print(
+            f"\nError: {str(e)}", style=Style(color=NordTheme.NORD11)
+        )
+        generator.logger.error(f"Fatal error: {str(e)}")
         sys.exit(1)
+    finally:
+        generator.console.print("\nGoodbye!", style=Style(color=NordTheme.NORD14))
 
 
 if __name__ == "__main__":

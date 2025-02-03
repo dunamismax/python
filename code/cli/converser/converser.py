@@ -1,295 +1,303 @@
+#!/usr/bin/env python3
+"""
+Terminal-based AI Bot Conversation
+---------------------------------
+A robust CLI chat interface that simulates conversations between AI bots with:
+- Nord color theme integration
+- Streaming responses with proper formatting
+- Markdown logging for conversation history
+- Thinking delay with spinner animation
+"""
+
 import os
+import sys
 import time
 import logging
+from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Dict, List, Optional
+from dataclasses import dataclass
 
 from dotenv import load_dotenv
-from rich.console import Console
-from rich.theme import Theme
-from rich.panel import Panel
-from rich.status import Status
-from rich.text import Text
 from openai import OpenAI
+from rich.console import Console
+from rich.live import Live
+from rich.text import Text
+from rich.prompt import Prompt
+from rich.style import Style
+from rich.spinner import Spinner
+from rich.status import Status
+
+# Load environment variables
+load_dotenv()
+
+
+# -----------------------------------------------------------------------------
+# Nord Color Theme Configuration
+# -----------------------------------------------------------------------------
+class NordTheme:
+    # [Previous theme code remains exactly the same...]
+    NORD0 = "#2E3440"  # Dark bg
+    NORD1 = "#3B4252"  # Lighter bg
+    NORD2 = "#434C5E"  # Selection bg
+    NORD3 = "#4C566A"  # Inactive text
+
+    # Snow Storm
+    NORD4 = "#D8DEE9"  # Text
+    NORD5 = "#E5E9F0"  # Light text
+    NORD6 = "#ECEFF4"  # Bright text
+
+    # Frost
+    NORD7 = "#8FBCBB"  # Mint
+    NORD8 = "#88C0D0"  # Light blue
+    NORD9 = "#81A1C1"  # Medium blue
+    NORD10 = "#5E81AC"  # Dark blue
+
+    # Aurora
+    NORD11 = "#BF616A"  # Red
+    NORD12 = "#D08770"  # Orange
+    NORD13 = "#EBCB8B"  # Yellow
+    NORD14 = "#A3BE8C"  # Green
+    NORD15 = "#B48EAD"  # Purple
+
+    @classmethod
+    def style(cls, color: str, bg: str = None) -> Style:
+        if bg:
+            return Style(color=color, bgcolor=bg)
+        return Style(color=color)
+
 
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-load_dotenv()
+@dataclass
+class Config:
+    DEFAULT_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4")
+    THINKING_DELAY: int = int(os.getenv("THINKING_DELAY", "20"))  # 20 seconds
 
-# OpenAI Configuration
-DEFAULT_MODEL = os.getenv("OPENAI_MODEL", "chatgpt-4o-latest")
-
-# Timing Configuration
-THINKING_DELAY = int(os.getenv("THINKING_DELAY", "20"))
-
-# Logging Configuration
-MAX_LOG_SIZE = int(os.getenv("MAX_LOG_SIZE", "10485760"))  # 10MB
-LOG_BACKUP_COUNT = int(os.getenv("LOG_BACKUP_COUNT", "3"))
-
-# -----------------------------------------------------------------------------
-# Bot Configurations
-# -----------------------------------------------------------------------------
-BOT_1 = {
-    "name": os.getenv("BOT_1_NAME", "bot-1"),
-    "system_prompt": os.getenv(
-        "BOT_1_PROMPT",
-        """You are bot-1 – a thoughtful and engaging conversationalist. Never break character.
-
-Core Psychology:
-- Believes that every conversation is an opportunity to learn and grow.
-""",
-    ),
-    "style": os.getenv("BOT_1_STYLE", "bot-1"),
-}
-
-BOT_2 = {
-    "name": os.getenv("BOT_2_NAME", "bot-2"),
-    "system_prompt": os.getenv(
-        "BOT_2_PROMPT",
-        """You are bot-2 – a direct and analytical debater. Never break character.
-
-Core Psychology:
-- Believes that truth is best uncovered through rigorous questioning.
-""",
-    ),
-    "style": os.getenv("BOT_2_STYLE", "bot-2"),
-}
-
-# -----------------------------------------------------------------------------
-# Rich Console Setup with Nord Theme
-# -----------------------------------------------------------------------------
-nord_theme = Theme(
-    {
-        "bot-1": "#A3BE8C bold",
-        "bot-2": "#BF616A bold",
-        "system": "#81A1C1",
-        "status": "#B48EAD",
-        "title": "#88C0D0 bold",
-        "muted": "#4C566A",
-        "error": "#BF616A",
+    BOT_1 = {
+        "name": os.getenv("BOT_1_NAME", "Bot Alpha"),
+        "system_prompt": os.getenv(
+            "BOT_1_PROMPT",
+            "You are Bot Alpha – a thoughtful and engaging conversationalist. Never break character.",
+        ),
+        "style": NordTheme.NORD14,  # Green
     }
-)
 
-console = Console(theme=nord_theme, width=100)
+    BOT_2 = {
+        "name": os.getenv("BOT_2_NAME", "Bot Beta"),
+        "system_prompt": os.getenv(
+            "BOT_2_PROMPT",
+            "You are Bot Beta – a direct and analytical debater. Never break character.",
+        ),
+        "style": NordTheme.NORD11,  # Red
+    }
 
 
-# -----------------------------------------------------------------------------
-# Logging Setup
-# -----------------------------------------------------------------------------
-def setup_markdown_logger() -> logging.Logger:
-    """Configure markdown logging with timestamps and bot formatting."""
+class MarkdownLogger:
+    """Handles markdown-formatted logging of bot conversations."""
 
-    class MarkdownFormatter(logging.Formatter):
-        def format(self, record: logging.LogRecord) -> str:
-            timestamp = self.formatTime(record, datefmt="%Y-%m-%d %H:%M:%S")
-            persona = getattr(record, "persona", "system")
-            message = (record.getMessage() or "").strip()
-            if persona == "system":
-                return f"\n### {timestamp} - System Message\n{message}\n"
-            elif persona == BOT_1["name"]:
-                return f"\n#### {timestamp} - {BOT_1['name']}\n{message}\n"
-            elif persona == BOT_2["name"]:
-                return f"\n#### {timestamp} - {BOT_2['name']}\n{message}\n"
-            else:
-                return f"\n#### {timestamp} - {persona}\n{message}\n"
+    def __init__(self):
+        self.logger = self._setup_logger()
 
-    logger = logging.getLogger("conversation")
-    logger.setLevel(logging.INFO)
+    def _setup_logger(self) -> logging.Logger:
+        class MarkdownFormatter(logging.Formatter):
+            def format(self, record: logging.LogRecord) -> str:
+                timestamp = self.formatTime(record, datefmt="%Y-%m-%d %H:%M:%S")
+                role = getattr(record, "role", "system")
+                message = (record.getMessage() or "").strip()
 
-    if not logger.handlers:
-        os.makedirs("logs", exist_ok=True)
-        log_path = "logs/conversation_log.md"
-        handler = RotatingFileHandler(
-            log_path,
-            maxBytes=MAX_LOG_SIZE,
-            backupCount=LOG_BACKUP_COUNT,
-            encoding="utf-8",
-        )
-        if not os.path.exists(log_path) or os.path.getsize(log_path) == 0:
-            with open(log_path, "w", encoding="utf-8") as f:
-                f.write("# AI Personality Dialogue Log\n\n")
+                if role == "system":
+                    return f"\n### {timestamp} - System Message\n{message}\n"
+                return f"\n#### {timestamp} - {role}\n{message}\n"
+
+        logger = logging.getLogger("bot_conversation")
+        logger.setLevel(logging.INFO)
+
+        if not logger.handlers:
+            os.makedirs("logs", exist_ok=True)
+            log_file = f"logs/bot_conversation_{datetime.now():%Y%m%d_%H%M%S}.md"
+
+            with open(log_file, "w", encoding="utf-8") as f:
+                f.write("# AI Bot Conversation Log\n\n")
                 f.write(
-                    f"*An eternal conversation between {BOT_1['name']} and {BOT_2['name']}*\n\n"
+                    f"*Dialogue between {Config.BOT_1['name']} and {Config.BOT_2['name']}*\n\n"
                 )
                 f.write("---\n")
-        handler.setFormatter(MarkdownFormatter())
-        logger.addHandler(handler)
-    return logger
+
+            handler = RotatingFileHandler(
+                log_file,
+                maxBytes=10 * 1024 * 1024,  # 10MB
+                backupCount=3,
+                encoding="utf-8",
+            )
+            handler.setFormatter(MarkdownFormatter())
+            logger.addHandler(handler)
+
+        return logger
+
+    def log(self, message: str, role: str = "system") -> None:
+        """Log a message with the specified role."""
+        self.logger.info(message, extra={"role": role})
 
 
-# -----------------------------------------------------------------------------
-# OpenAI API Helper
-# -----------------------------------------------------------------------------
-def get_ai_response(
-    client: OpenAI, messages: List[Dict[str, str]], status_message: Optional[str] = None
-) -> str:
-    """Get response from OpenAI API with robust error handling."""
-    try:
-        completion = client.chat.completions.create(
-            model=DEFAULT_MODEL, messages=messages
-        )
-        content = completion.choices[0].message.content
-        return (
-            content.strip()
-            if content is not None
-            else "I need a moment to collect my thoughts."
-        )
-    except Exception as e:
-        console.print(f"[error]API Error: {str(e)}[/error]")
-        return "I encountered an error in generating my response."
+class BotConversationInterface:
+    """Manages the bot conversation interface using Rich."""
 
+    def __init__(self):
+        self.console = Console()
+        self.client = OpenAI()
+        self.markdown_logger = MarkdownLogger()
+        self.theme = NordTheme
 
-# -----------------------------------------------------------------------------
-# Display Utilities
-# -----------------------------------------------------------------------------
-def display_message(speaker: str, message: Optional[str], style: str) -> None:
-    """Display a message using a Rich panel with null safety."""
-    try:
-        cleaned_message = str(
-            message or "I need a moment to collect my thoughts."
-        ).strip()
-        panel = Panel(
-            Text(cleaned_message),
-            title=f"[{style}]{speaker}[/{style}]",
-            border_style=style,
-            subtitle=f"[{style}]{time.strftime('%H:%M:%S')}[/{style}]",
-        )
-        console.print(panel)
-    except Exception as e:
-        console.print(f"[error]Display error: {str(e)}[/error]")
-        console.print(f"[{style}]{speaker}[/{style}]: {cleaned_message}")
-
-
-def get_response_with_delay(
-    client: OpenAI,
-    messages: List[Dict[str, str]],
-    delay: int,
-    status_message: str,
-    speaker: str,
-    style: str,
-) -> str:
-    """
-    Wait for the thinking delay (with a spinner), get the AI response,
-    and then display it.
-    """
-    try:
-        with Status(f"[status]{status_message}[/status]", spinner="dots"):
-            time.sleep(delay)
-            response = get_ai_response(client, messages)
-        display_message(speaker, response, style)
-        return response
-    except Exception as e:
-        console.print(f"[error]Error in get_response_with_delay: {str(e)}[/error]")
-        fallback = "I encountered an error in processing."
-        display_message(speaker, fallback, style)
-        return fallback
-
-
-# -----------------------------------------------------------------------------
-# Core Conversation Logic
-# -----------------------------------------------------------------------------
-def run_conversation() -> None:
-    """Run the endless conversation between two AI bot personas."""
-    try:
-        api_key = os.getenv("OPENAI_API_KEY")
-        if not api_key:
-            raise ValueError("OPENAI_API_KEY environment variable is not set")
-
-        client = OpenAI(api_key=api_key)
-        logger = setup_markdown_logger()
-
-        # Initialize display
-        console.clear()
-        console.print("[title]AI Personality Dialogue[/title]")
-        console.print(
-            f"[muted]An eternal conversation between {BOT_1['name']} and {BOT_2['name']}[/muted]\n"
-        )
-
-        # Generate conversation starter
+    def thinking_delay(self, bot_name: str, style_color: str) -> None:
+        """Display thinking animation with delay."""
         with Status(
-            "[status]Generating conversation starter...[/status]", spinner="dots"
-        ):
-            current_topic = get_ai_response(
-                client,
-                [
-                    {
-                        "role": "system",
-                        "content": (
-                            "You are a master of creating engaging conversation starters that:\n"
-                            "1. Are thought-provoking but not controversial\n"
-                            "2. Include specific, relatable examples\n"
-                            "3. Allow for multiple perspectives\n"
-                            "4. Are 2-3 sentences maximum\n"
-                            "5. Avoid rhetorical questions\n"
-                            "6. Use natural, conversational language\n\n"
-                            "Respond ONLY with the conversation starter itself."
-                        ),
-                    },
-                    {
-                        "role": "user",
-                        "content": "Generate an engaging conversation starter.",
-                    },
-                ],
-            )
+            f"{bot_name} is thinking...",
+            spinner="dots",
+            spinner_style=self.theme.style(style_color),
+            console=self.console,
+        ) as status:
+            time.sleep(Config.THINKING_DELAY)
 
-        # Display and log the initial topic
-        console.print(
-            Panel(Text(current_topic), title="[title]Conversation Starter[/title]")
+    def _print_header(self, title: str) -> None:
+        """Print a styled header."""
+        self.console.print()
+        self.console.print(title, style=self.theme.style(self.theme.NORD8))
+        self.console.print(
+            "Press Ctrl+C to exit", style=self.theme.style(self.theme.NORD3)
         )
-        logger.info(current_topic, extra={"persona": "system"})
+        self.console.print()
 
-        # Initialize message histories for both bots
-        bot1_messages = [
-            {"role": "system", "content": BOT_1["system_prompt"]},
-            {"role": "user", "content": current_topic},
-        ]
-        bot2_messages = [
-            {"role": "system", "content": BOT_2["system_prompt"]},
-        ]
+    def _stream_response(
+        self, messages: List[Dict], speaker: str, model: str = "gpt-4"
+    ) -> str:
+        """Stream the bot's response with proper formatting."""
+        full_response = []
+        response_text = Text()
 
-        # Main conversation loop
-        while True:
-            # Bot 1 cycle
-            bot1_response = get_response_with_delay(
-                client,
-                bot1_messages,
-                THINKING_DELAY,
-                f"{BOT_1['name']} is thinking...",
-                BOT_1["name"],
-                BOT_1["style"],
+        # Add the speaker label with appropriate color
+        style_color = (
+            Config.BOT_1["style"]
+            if speaker == Config.BOT_1["name"]
+            else Config.BOT_2["style"]
+        )
+        response_text.append(f"{speaker}: ", style=self.theme.style(style_color))
+
+        with Live(response_text, console=self.console, refresh_per_second=15) as live:
+            stream = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=True,
             )
-            logger.info(bot1_response, extra={"persona": BOT_1["name"]})
-            bot1_messages.append({"role": "assistant", "content": bot1_response})
-            bot2_messages.append({"role": "user", "content": bot1_response})
-            time.sleep(1)
 
-            # Bot 2 cycle
-            bot2_response = get_response_with_delay(
-                client,
-                bot2_messages,
-                THINKING_DELAY,
-                f"{BOT_2['name']} is thinking...",
-                BOT_2["name"],
-                BOT_2["style"],
+            for chunk in stream:
+                if chunk.choices[0].delta.content:
+                    token = chunk.choices[0].delta.content
+                    full_response.append(token)
+                    response_text.append(
+                        token, style=self.theme.style(self.theme.NORD4)
+                    )
+                    live.update(response_text)
+
+        self.console.print()
+        return "".join(full_response)
+
+    def run_conversation(self) -> None:
+        """Main conversation loop between the two bots."""
+        self._print_header(
+            f"AI Bot Conversation: {Config.BOT_1['name']} vs {Config.BOT_2['name']}"
+        )
+        self.markdown_logger.log("Starting bot conversation")
+
+        try:
+            # Generate conversation starter
+            self.console.print(
+                "Generating conversation starter...",
+                style=self.theme.style(self.theme.NORD8),
             )
-            logger.info(bot2_response, extra={"persona": BOT_2["name"]})
-            bot2_messages.append({"role": "assistant", "content": bot2_response})
-            bot1_messages.append({"role": "user", "content": bot2_response})
-            time.sleep(1)
 
-    except KeyboardInterrupt:
-        console.print("\n[system]Conversation ended by user[/system]")
-        logger.info("Conversation ended by user", extra={"persona": "system"})
+            starter_messages = [
+                {
+                    "role": "system",
+                    "content": "Generate an engaging conversation starter about AI ethics.",
+                }
+            ]
+
+            starter = self._stream_response(
+                starter_messages, "System", Config.DEFAULT_MODEL
+            )
+            self.markdown_logger.log(starter)
+
+            # Initialize message histories for both bots
+            bot1_msgs = [
+                {"role": "system", "content": Config.BOT_1["system_prompt"]},
+                {"role": "user", "content": starter},
+            ]
+
+            bot2_msgs = [
+                {"role": "system", "content": Config.BOT_2["system_prompt"]},
+                {"role": "user", "content": starter},
+            ]
+
+            # First response doesn't need thinking delay
+            response = self._stream_response(
+                bot1_msgs, Config.BOT_1["name"], Config.DEFAULT_MODEL
+            )
+            self.markdown_logger.log(response, Config.BOT_1["name"])
+            bot1_msgs.append({"role": "assistant", "content": response})
+            bot2_msgs.append({"role": "user", "content": response})
+
+            while True:
+                # Bot 2's turn (with thinking delay)
+                self.thinking_delay(Config.BOT_2["name"], Config.BOT_2["style"])
+
+                response = self._stream_response(
+                    bot2_msgs, Config.BOT_2["name"], Config.DEFAULT_MODEL
+                )
+                self.markdown_logger.log(response, Config.BOT_2["name"])
+                bot2_msgs.append({"role": "assistant", "content": response})
+                bot1_msgs.append({"role": "user", "content": response})
+
+                # Bot 1's turn (with thinking delay)
+                self.thinking_delay(Config.BOT_1["name"], Config.BOT_1["style"])
+
+                response = self._stream_response(
+                    bot1_msgs, Config.BOT_1["name"], Config.DEFAULT_MODEL
+                )
+                self.markdown_logger.log(response, Config.BOT_1["name"])
+                bot1_msgs.append({"role": "assistant", "content": response})
+                bot2_msgs.append({"role": "user", "content": response})
+
+        except KeyboardInterrupt:
+            self.console.print(
+                "\nConversation ended by user", style=self.theme.style(self.theme.NORD9)
+            )
+            self.markdown_logger.log("Conversation ended by user")
+
+
+def main():
+    """Main application entry point."""
+    if not os.getenv("OPENAI_API_KEY"):
+        console = Console()
+        console.print(
+            "Error: OPENAI_API_KEY environment variable not set",
+            style=Style(color=NordTheme.NORD11),
+        )
+        sys.exit(1)
+
+    interface = BotConversationInterface()
+    try:
+        interface.run_conversation()
     except Exception as e:
-        console.print(f"\n[error]Critical error: {str(e)}[/error]")
-        logger.error(str(e), exc_info=True)
+        interface.console.print(
+            f"\nError: {str(e)}", style=Style(color=NordTheme.NORD11)
+        )
+        interface.markdown_logger.log(f"Fatal error: {str(e)}")
+        sys.exit(1)
+    finally:
+        interface.console.print("\nGoodbye!", style=Style(color=NordTheme.NORD14))
 
 
 if __name__ == "__main__":
-    try:
-        run_conversation()
-    except Exception as e:
-        console = Console(theme=nord_theme)
-        console.print(f"[error]Error: {str(e)}[/error]")
-        logging.error(str(e), exc_info=True)
+    main()
