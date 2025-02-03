@@ -1,3 +1,75 @@
+#!/usr/bin/env python3
+"""
+Terminal Chat Application with Rich
+-------------------------------------
+A minimal CLI chat interface with markdown support and streaming responses.
+"""
+
+import os
+import sys
+import logging
+from datetime import datetime
+from enum import Enum
+from typing import Dict, List, Optional
+
+from logging.handlers import RotatingFileHandler
+
+from rich.console import Console
+from rich.live import Live
+from rich.markdown import Markdown
+from rich.prompt import Prompt
+from rich.style import Style
+from rich.text import Text
+
+from dotenv import load_dotenv
+
+# Updated OpenAI client import
+from openai import OpenAI
+
+# Load environment variables
+load_dotenv()
+
+
+# -----------------------------------------------------------------------------
+# Nord Color Theme Configuration using Enum
+# -----------------------------------------------------------------------------
+class NordColor(Enum):
+    """Enumeration of Nord color palette values."""
+
+    # Polar Night
+    POLAR_NIGHT_0 = "#2E3440"  # Dark background
+    POLAR_NIGHT_1 = "#3B4252"  # Lighter background
+    POLAR_NIGHT_2 = "#434C5E"  # Selection background
+    POLAR_NIGHT_3 = "#4C566A"  # Inactive text
+
+    # Snow Storm
+    SNOW_STORM_4 = "#D8DEE9"  # Text
+    SNOW_STORM_5 = "#E5E9F0"  # Light text
+    SNOW_STORM_6 = "#ECEFF4"  # Bright text
+
+    # Frost
+    FROST_7 = "#8FBCBB"  # Mint
+    FROST_8 = "#88C0D0"  # Light blue
+    FROST_9 = "#81A1C1"  # Medium blue
+    FROST_10 = "#5E81AC"  # Dark blue
+
+    # Aurora
+    AURORA_11 = "#BF616A"  # Red
+    AURORA_12 = "#D08770"  # Orange
+    AURORA_13 = "#EBCB8B"  # Yellow
+    AURORA_14 = "#A3BE8C"  # Green
+    AURORA_15 = "#B48EAD"  # Purple
+
+
+def nord_style(color: NordColor, bg: Optional[NordColor] = None) -> Style:
+    """
+    Return a Rich Style using Nord colors.
+    """
+    if bg:
+        return Style(color=color.value, bgcolor=bg.value)
+    return Style(color=color.value)
+
+
 # -----------------------------------------------------------------------------
 # Chatbot Configurations
 # -----------------------------------------------------------------------------
@@ -63,3 +135,260 @@ CHATBOTS: List[Dict[str, str]] = [
         "system_prompt": "You are the Language Translator, an AI embodying # Translation Excellence: unparalleled mastery in multilingual communication, translation methodologies, interpretation techniques, and cross-cultural understanding, with expertise across major world languages (English, Spanish, Mandarin, Arabic, French, German, Japanese, Korean, Russian, Portuguese, Italian) and their regional variants, # Linguistic Foundations: comprehensive knowledge of phonetics, phonology, morphology, syntax, semantics, pragmatics, and sociolinguistics across language families, # Cultural Competence: deep understanding of cultural contexts, idioms, customs, taboos, registers, honorifics, and social norms across different societies, # Translation Theory: expertise in translation theories, equivalence principles, localization strategies, transcreation methods, and adaptation techniques, # Technical Translation: mastery of specialized translation fields including legal, medical, technical, financial, and scientific translation, ensuring terminology accuracy and field-specific conventions, # Literary Translation: proficiency in translating literature, poetry, drama, maintaining style, rhythm, and artistic elements while preserving meaning, # Interpretation Skills: expertise in simultaneous interpretation, consecutive interpretation, sight translation, and conference interpreting techniques, # Translation Technology: mastery of Computer-Assisted Translation (CAT) tools, Translation Memory systems, terminology management software, and machine translation post-editing, # Quality Assurance: rigorous approaches to translation quality control, proofreading, editing, and quality assessment methodologies, # Project Management: expertise in managing translation projects, coordinating with stakeholders, maintaining glossaries, and ensuring consistency, # Localization Expertise: understanding of software localization, website adaptation, multimedia localization, and cultural adaptation principles, # Terminology Management: skills in creating and maintaining terminology databases, style guides, and translation memories, # Audiovisual Translation: expertise in subtitling, dubbing, voice-over, and multimedia translation requirements, # Document Translation: proficiency in handling various document types (legal, technical, marketing, academic) with appropriate formatting and style, # Business Communication: understanding of international business etiquette, corporate communication styles, and professional correspondence across cultures, # Language Technology: knowledge of natural language processing, machine translation principles, and AI-assisted translation tools, # Research Skills: expertise in linguistic research, terminology research, and cultural context investigation, # Educational Methods: ability to explain language concepts, translation principles, and cultural nuances clearly and effectively, # Cross-cultural Communication: understanding of intercultural communication principles, non-verbal communication, and cultural sensitivity, # Dialectology: knowledge of regional variations, dialects, and sociolects within languages, # Historical Linguistics: understanding language evolution, etymology, and historical language relationships, # Comparative Linguistics: expertise in comparing language structures, identifying patterns, and understanding language families, # Writing Systems: proficiency in various writing systems, scripts, and transliteration methods, # Language Assessment: ability to evaluate language proficiency levels and adapt translations accordingly, while maintaining unwavering commitment to translation accuracy, cultural sensitivity, and professional ethics, delivering guidance with linguistic precision, cultural awareness, and practical wisdom, fostering effective cross-cultural communication through comprehensive language expertise and translation excellence.",
     },
 ]
+
+
+def validate_chatbot_config(config: List[Dict[str, str]]) -> bool:
+    """
+    Validate the chatbot configuration.
+    """
+    required_fields = ["name", "system_prompt"]
+    for bot in config:
+        missing_fields = [field for field in required_fields if field not in bot]
+        if missing_fields:
+            raise ValueError(
+                f"Missing required fields {missing_fields} in chatbot config: "
+                f"{bot.get('name', 'unknown')}"
+            )
+    return True
+
+
+# Validate configuration on import
+validate_chatbot_config(CHATBOTS)
+
+
+# -----------------------------------------------------------------------------
+# Markdown Logger
+# -----------------------------------------------------------------------------
+class MarkdownFormatter(logging.Formatter):
+    """Formats log records as markdown text."""
+
+    def format(self, record: logging.LogRecord) -> str:
+        timestamp = self.formatTime(record, datefmt="%Y-%m-%d %H:%M:%S")
+        role = getattr(record, "role", "system")
+        message = (record.getMessage() or "").strip()
+        if role == "system":
+            return f"\n### {timestamp} - System Message\n{message}\n"
+        elif role == "user":
+            return f"\n#### {timestamp} - User\n{message}\n"
+        elif role == "assistant":
+            return f"\n#### {timestamp} - Assistant\n{message}\n"
+        return f"\n#### {timestamp} - {role}\n{message}\n"
+
+
+class MarkdownLogger:
+    """Handles markdown-formatted logging of chat sessions."""
+
+    LOG_DIR: str = "logs"
+    LOG_FILE: str = "chat_history.md"
+    MAX_BYTES: int = 2 * 1024 * 1024  # 2MB
+    BACKUP_COUNT: int = 3
+
+    def __init__(self) -> None:
+        self.logger = self._setup_logger()
+
+    def _setup_logger(self) -> logging.Logger:
+        """Sets up the logger with a RotatingFileHandler and markdown formatting."""
+        logger = logging.getLogger("chat_history")
+        logger.setLevel(logging.INFO)
+        logger.propagate = False  # Prevent duplicate logging to the root logger
+
+        if not logger.handlers:
+            os.makedirs(self.LOG_DIR, exist_ok=True)
+            log_file = os.path.join(self.LOG_DIR, self.LOG_FILE)
+
+            # Write markdown header if the log file does not already exist.
+            if not os.path.exists(log_file):
+                with open(log_file, "w", encoding="utf-8") as f:
+                    f.write("# Chat History Log\n\n")
+                    f.write(
+                        "*Chat session logs for the AI assistant conversation.*\n\n"
+                    )
+                    f.write("---\n")
+
+            handler = RotatingFileHandler(
+                log_file,
+                maxBytes=self.MAX_BYTES,
+                backupCount=self.BACKUP_COUNT,
+                encoding="utf-8",
+            )
+            handler.setFormatter(MarkdownFormatter())
+            logger.addHandler(handler)
+
+        return logger
+
+    def log(self, message: str, role: str = "system") -> None:
+        """Log a message with the specified role."""
+        self.logger.info(message, extra={"role": role})
+
+
+# -----------------------------------------------------------------------------
+# Chat Interface
+# -----------------------------------------------------------------------------
+class ChatInterface:
+    """Manages the chat interface using Rich."""
+
+    def __init__(self) -> None:
+        self.console = Console()
+        self.messages: List[Dict] = []
+        # Updated client initialization
+        self.client = OpenAI()
+        self.markdown_logger = MarkdownLogger()
+
+    def _print_header(self, title: str) -> None:
+        """Print a styled header."""
+        self.console.print()
+        self.console.print(title, style=nord_style(NordColor.FROST_8))
+        self.console.print(
+            "Press Ctrl+C to exit", style=nord_style(NordColor.POLAR_NIGHT_3)
+        )
+        self.console.print()
+
+    def _stream_response(self, messages: List[Dict], model: str = "gpt-4o") -> str:
+        """
+        Stream the AI response with proper formatting using OpenAI's ChatCompletion.
+        """
+        full_response: List[str] = []
+        response_text = Text()
+        response_text.append("Assistant: ", style=nord_style(NordColor.AURORA_15))
+
+        with Live(response_text, console=self.console, refresh_per_second=15) as live:
+            # Updated chat completions API call
+            stream = self.client.chat.completions.create(
+                model=model,
+                messages=messages,
+                stream=True,
+            )
+            for chunk in stream:
+                if chunk.choices[0].delta.content is not None:
+                    token = chunk.choices[0].delta.content
+                    full_response.append(token)
+                    response_text.append(
+                        token, style=nord_style(NordColor.SNOW_STORM_4)
+                    )
+                    live.update(response_text)
+
+        self.console.print()  # Newline after streaming
+        return "".join(full_response)
+
+    def select_bot(self) -> Optional[Dict[str, str]]:
+        """Display the bot selection menu."""
+        self._print_header("Choose your AI assistant:")
+        for i, bot in enumerate(CHATBOTS, 1):
+            name_text = Text(f"{i}. {bot['name']}", style=nord_style(NordColor.FROST_8))
+            self.console.print(name_text)
+
+        while True:
+            try:
+                choice = Prompt.ask(
+                    "\nEnter number (q to quit)",
+                    choices=[str(i) for i in range(1, len(CHATBOTS) + 1)] + ["q"],
+                    show_choices=False,
+                )
+            except KeyboardInterrupt:
+                # Graceful exit on Ctrl+C
+                sys.exit(0)
+
+            if choice.lower() == "q":
+                return None
+            try:
+                return CHATBOTS[int(choice) - 1]
+            except (ValueError, IndexError):
+                self.console.print(
+                    "Invalid selection. Please try again.",
+                    style=nord_style(NordColor.AURORA_11),
+                )
+
+    def chat_session(self, bot_config: Dict[str, str]) -> bool:
+        """
+        Manage a chat session with the selected AI assistant.
+        """
+        self._print_header(f"Chatting with {bot_config['name']}")
+        messages = [{"role": "system", "content": bot_config["system_prompt"]}]
+        self.markdown_logger.log(f"Started chat session with {bot_config['name']}")
+
+        # Updated default model name
+        model = bot_config.get("model", "gpt-4o")
+
+        try:
+            while True:
+                self.console.print(
+                    "You:", style=nord_style(NordColor.AURORA_14), end=" "
+                )
+                user_input = input().strip()
+                if user_input.lower() in ("exit", "quit"):
+                    break
+
+                self.markdown_logger.log(user_input, "user")
+                messages.append({"role": "user", "content": user_input})
+
+                self.console.print()  # Blank line before response
+                response = self._stream_response(messages, model=model)
+                self.markdown_logger.log(response, "assistant")
+                messages.append({"role": "assistant", "content": response})
+
+        except KeyboardInterrupt:
+            self.console.print(
+                "\nSession interrupted", style=nord_style(NordColor.FROST_9)
+            )
+            return self._confirm_exit()
+
+        return True
+
+    def _confirm_exit(self) -> bool:
+        """
+        Confirm if the user wants to exit.
+        """
+        try:
+            self.console.print(
+                "\nReturn to bot selection? (y/n) ",
+                style=nord_style(NordColor.AURORA_14),
+                end="",
+            )
+            choice = Prompt.ask("", choices=["y", "n"], show_choices=False)
+            return choice.lower() == "y"
+        except KeyboardInterrupt:
+            return False
+
+
+# -----------------------------------------------------------------------------
+# Main Application
+# -----------------------------------------------------------------------------
+def main() -> None:
+    """Main application entry point."""
+    if not os.getenv("OPENAI_API_KEY"):
+        console = Console()
+        console.print(
+            "Error: OPENAI_API_KEY environment variable not set",
+            style=nord_style(NordColor.AURORA_11),
+        )
+        sys.exit(1)
+
+    chat_interface = ChatInterface()
+    chat_interface.markdown_logger.log("Application started")
+
+    try:
+        while True:
+            bot = chat_interface.select_bot()
+            if not bot:
+                break
+            if not chat_interface.chat_session(bot):
+                break
+    except KeyboardInterrupt:
+        # Graceful exit on Ctrl+C in the main loop
+        pass
+    except Exception as e:
+        chat_interface.console.print(
+            f"Error: {str(e)}",
+            style=nord_style(NordColor.AURORA_11),
+        )
+        sys.exit(1)
+    finally:
+        # Always log closure and say goodbye.
+        chat_interface.markdown_logger.log("Application closed")
+        chat_interface.console.print(
+            "\nGoodbye!", style=nord_style(NordColor.AURORA_14)
+        )
+
+
+if __name__ == "__main__":
+    main()
