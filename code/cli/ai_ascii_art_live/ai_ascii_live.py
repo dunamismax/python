@@ -1,12 +1,8 @@
 #!/usr/bin/env python3
 """
-Rich-based ASCII Art Generator
------------------------------
-A modern CLI ASCII art generator using OpenAI's GPT model with:
-- Rich UI components and styling
-- Nord color theme integration
-- Streaming responses with proper formatting
-- Automated art generation with configurable intervals
+ASCII Art Generator
+-----------------------------------
+A CLI-based ASCII art generator using GPT models.
 """
 
 import os
@@ -14,69 +10,60 @@ import sys
 import time
 import logging
 from datetime import datetime
-from typing import Optional
 from dataclasses import dataclass
+from typing import Optional
 from logging.handlers import RotatingFileHandler
 
 from dotenv import load_dotenv
 from openai import OpenAI
 from rich.console import Console
-from rich.live import Live
-from rich.text import Text
 from rich.panel import Panel
 from rich.style import Style
+from rich.text import Text
 from rich.status import Status
-from rich.spinner import Spinner
-from rich.prompt import Prompt
 
-# Load environment variables
+# -----------------------------------------------------------------------------
+# 1. Environment & Nord Theme
+# -----------------------------------------------------------------------------
 load_dotenv()
 
 
-# -----------------------------------------------------------------------------
-# Nord Color Theme Configuration
-# -----------------------------------------------------------------------------
 class NordTheme:
-    # Polar Night
-    NORD0 = "#2E3440"  # Dark bg
-    NORD1 = "#3B4252"  # Lighter bg
-    NORD2 = "#434C5E"  # Selection bg
-    NORD3 = "#4C566A"  # Inactive text
-
-    # Snow Storm
-    NORD4 = "#D8DEE9"  # Text
-    NORD5 = "#E5E9F0"  # Light text
-    NORD6 = "#ECEFF4"  # Bright text
-
-    # Frost
-    NORD7 = "#8FBCBB"  # Mint
-    NORD8 = "#88C0D0"  # Light blue
-    NORD9 = "#81A1C1"  # Medium blue
-    NORD10 = "#5E81AC"  # Dark blue
-
-    # Aurora
-    NORD11 = "#BF616A"  # Red
-    NORD12 = "#D08770"  # Orange
-    NORD13 = "#EBCB8B"  # Yellow
-    NORD14 = "#A3BE8C"  # Green
-    NORD15 = "#B48EAD"  # Purple
+    NORD0 = "#2E3440"
+    NORD1 = "#3B4252"
+    NORD2 = "#434C5E"
+    NORD3 = "#4C566A"
+    NORD4 = "#D8DEE9"
+    NORD5 = "#E5E9F0"
+    NORD6 = "#ECEFF4"
+    NORD7 = "#8FBCBB"
+    NORD8 = "#88C0D0"
+    NORD9 = "#81A1C1"
+    NORD10 = "#5E81AC"
+    NORD11 = "#BF616A"
+    NORD12 = "#D08770"
+    NORD13 = "#EBCB8B"
+    NORD14 = "#A3BE8C"
+    NORD15 = "#B48EAD"
 
     @classmethod
-    def style(cls, color: str, bg: str = None) -> Style:
+    def style(cls, color: str, bg: Optional[str] = None) -> Style:
         if bg:
             return Style(color=color, bgcolor=bg)
         return Style(color=color)
 
 
 # -----------------------------------------------------------------------------
-# Configuration
+# 2. Configuration
 # -----------------------------------------------------------------------------
 @dataclass
 class Config:
+    OPENAI_API_KEY: str = os.getenv("OPENAI_API_KEY", "")
     DEFAULT_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4")
-    GENERATION_PAUSE: int = int(os.getenv("GENERATION_PAUSE", "10"))
-    MAX_ART_WIDTH: int = 60
-    MAX_ART_HEIGHT: int = 20
+    GENERATION_PAUSE: int = int(os.getenv("GENERATION_PAUSE", "20"))
+
+    MAX_ART_WIDTH: int = 80
+    MAX_ART_HEIGHT: int = 40
 
     PROMPTS = [
         "Create a detailed landscape scene with mountains and trees",
@@ -87,27 +74,39 @@ class Config:
     ]
 
 
-class ASCIIArtGenerator:
-    """Manages the ASCII art generation interface using Rich."""
+# -----------------------------------------------------------------------------
+# 3. ASCII Art Application
+# -----------------------------------------------------------------------------
+class ASCIIArtApp:
+    """Generates ASCII art in a single request, ensuring triple quotes are included."""
 
     def __init__(self):
-        self.console = Console()
-        self.client = OpenAI()
+        self.config = Config()
         self.theme = NordTheme
-        self.setup_logging()
+        self.console = Console()
+        self.client = self._init_openai()
+        self.logger = self._setup_logging()
 
-    def setup_logging(self) -> None:
-        """Configure rotating file logger."""
-        logger = logging.getLogger("ascii_generator")
+    def _init_openai(self) -> OpenAI:
+        api_key = self.config.OPENAI_API_KEY
+        if not api_key:
+            self.console.print(
+                "[bold red]Error:[/bold red] OPENAI_API_KEY environment variable not set.",
+                style=self.theme.style(self.theme.NORD11),
+            )
+            sys.exit(1)
+        return OpenAI(api_key=api_key)
+
+    def _setup_logging(self) -> logging.Logger:
+        logger = logging.getLogger("ascii_art_app")
         logger.setLevel(logging.INFO)
 
         if not logger.handlers:
             os.makedirs("logs", exist_ok=True)
             log_file = f"logs/ascii_art_{datetime.now():%Y%m%d_%H%M%S}.log"
-
             handler = RotatingFileHandler(
                 log_file,
-                maxBytes=5 * 1024 * 1024,  # 5MB
+                maxBytes=5 * 1024 * 1024,  # 5 MB
                 backupCount=3,
                 encoding="utf-8",
             )
@@ -117,141 +116,133 @@ class ASCIIArtGenerator:
             handler.setFormatter(formatter)
             logger.addHandler(handler)
 
-        self.logger = logger
+        return logger
 
-    def _print_header(self) -> None:
-        """Print styled header."""
+    def print_header(self) -> None:
         self.console.print()
         self.console.print(
-            "ASCII Art Generator",
+            "ASCII Art Generator (Triple-Quoted)",
             style=self.theme.style(self.theme.NORD8),
             justify="center",
         )
         self.console.print(
-            "Press Ctrl+C to exit",
+            "Press Ctrl+C to exit at any time.\n",
             style=self.theme.style(self.theme.NORD3),
             justify="center",
         )
-        self.console.print()
 
     def generate_art(self, prompt: str) -> str:
-        """Generate ASCII art using GPT-4."""
+        """
+        Non-streaming GPT request that instructs GPT to enclose its ASCII in triple quotes.
+        Returns the entire text (including triple quotes).
+        """
+        system_prompt = (
+            "You are an ASCII art generator. Please enclose your entire ASCII art between triple quotes:\n"
+            '""" on its own line at the top, and """ on its own line at the bottom.\n'
+            "Do NOT add blank lines before or after the triple quotes.\n"
+            "Follow these guidelines for the ASCII art:\n"
+            f"- Maximum width: {self.config.MAX_ART_WIDTH} characters\n"
+            f"- Maximum height: {self.config.MAX_ART_HEIGHT} lines\n"
+            "- Use only ASCII characters (no Unicode)\n"
+            "- Provide only the ASCII art, no additional commentary.\n"
+            "- Keep line lengths consistent.\n"
+            "- Indent or center the art as you see fit, but ensure top line is the triple quotes.\n"
+        )
+
+        messages = [
+            {"role": "system", "content": system_prompt},
+            {"role": "user", "content": prompt},
+        ]
+
         try:
-            messages = [
-                {
-                    "role": "system",
-                    "content": (
-                        "You are an ASCII art generator. Create ASCII art with these guidelines:\n"
-                        f"- Maximum width: {Config.MAX_ART_WIDTH} characters\n"
-                        f"- Maximum height: {Config.MAX_ART_HEIGHT} lines\n"
-                        "- Use only ASCII characters (no Unicode)\n"
-                        "- Focus on visual clarity and artistic detail\n"
-                        "- Provide ONLY the ASCII art itself, no comments or explanations\n"
-                        "- Do not include triple quotes in your response\n"
-                        "- Ensure consistent line lengths\n"
-                        "- Center the art horizontally"
-                    ),
-                },
-                {"role": "user", "content": prompt},
-            ]
-
-            response_text = Text()
-
-            with Status(
+            with self.console.status(
                 "Generating ASCII art...",
                 spinner="dots",
                 spinner_style=self.theme.style(self.theme.NORD13),
-                console=self.console,
             ):
-                response = self.client.chat.completions.create(
-                    model=Config.DEFAULT_MODEL, messages=messages, stream=True
+                completion = self.client.chat.completions.create(
+                    model=self.config.DEFAULT_MODEL, messages=messages, stream=False
                 )
-
-                art = []
-                for chunk in response:
-                    if chunk.choices[0].delta.content:
-                        art.append(chunk.choices[0].delta.content)
-
-            return "".join(art).strip()
-
+            # Grab the entire text (with triple quotes)
+            return completion.choices[0].message.content
         except Exception as e:
-            self.logger.error(f"Art generation error: {e}")
-            return "Error generating art."
+            self.logger.error(f"Art generation error: {e}", exc_info=True)
+            return '"""\nError generating art.\n"""'
 
     def display_art(self, art: str, prompt: str) -> None:
-        """Display ASCII art with decorative formatting."""
-        # Format with triple quotes
-        formatted_art = f'"""\n{art}\n"""'
-
-        # Create panel with art
+        """
+        Show ASCII including triple quotes in a Rich panel. We do not strip them.
+        """
+        # Put the GPT response directly into a Rich Text object.
+        panel_content = Text(art, style=self.theme.style(self.theme.NORD4))
         panel = Panel(
-            Text(formatted_art, style=self.theme.style(self.theme.NORD4)),
+            panel_content,
             title="[bold]ASCII Art[/bold]",
             subtitle=f"Prompt: {prompt}",
             border_style=self.theme.style(self.theme.NORD8),
             padding=(1, 2),
         )
-
         self.console.print(panel)
 
     def run(self) -> None:
-        """Main execution loop."""
-        self._print_header()
-        self.logger.info("Starting ASCII art generator")
-        prompt_idx = 0
-        last_generation_time = 0
+        """Loop over prompts at intervals, showing new triple-quoted ASCII each time."""
+        self.print_header()
+        self.logger.info("Starting ASCII art generator (triple-quoted).")
+
+        prompts = self.config.PROMPTS
+        idx = 0
+        last_time = time.time()
 
         try:
             while True:
                 current_time = time.time()
+                if current_time - last_time >= self.config.GENERATION_PAUSE:
+                    prompt = prompts[idx]
+                    idx = (idx + 1) % len(prompts)
 
-                if current_time - last_generation_time >= Config.GENERATION_PAUSE:
-                    prompt = Config.PROMPTS[prompt_idx]
-                    prompt_idx = (prompt_idx + 1) % len(Config.PROMPTS)
-
-                    # Clear screen for new art
+                    # Clear terminal to show fresh art
                     self.console.clear()
-                    self._print_header()
+                    self.print_header()
 
-                    # Generate and display new art
                     art = self.generate_art(prompt)
                     self.display_art(art, prompt)
+                    self.logger.info(f"Generated art for prompt: '{prompt}'")
 
-                    self.logger.info(f"Generated new art with prompt: {prompt}")
-                    last_generation_time = current_time
+                    last_time = time.time()
 
-                time.sleep(0.1)  # Prevent CPU hogging
+                time.sleep(0.1)
 
         except KeyboardInterrupt:
             self.console.print(
-                "\nExiting ASCII Art Generator",
+                "\nExiting ASCII Art Generator...",
                 style=self.theme.style(self.theme.NORD9),
                 justify="center",
             )
-            self.logger.info("Generator stopped by user")
+            self.logger.info("Generator stopped by user.")
 
 
+# -----------------------------------------------------------------------------
+# 4. Entry Point
+# -----------------------------------------------------------------------------
 def main():
-    """Entry point with error handling."""
-    if not os.getenv("OPENAI_API_KEY"):
-        console = Console()
-        console.print(
-            "Error: OPENAI_API_KEY environment variable not set",
+    app = ASCIIArtApp()
+    if not app.config.OPENAI_API_KEY:
+        app.console.print(
+            "\n[bold red]Error:[/bold red] OPENAI_API_KEY not set. Exiting.",
             style=Style(color=NordTheme.NORD11),
         )
         sys.exit(1)
 
-    generator = ASCIIArtGenerator()
     try:
-        generator.run()
+        app.run()
     except Exception as e:
-        generator.console.print(
-            f"\nError: {str(e)}", style=Style(color=NordTheme.NORD11)
+        app.console.print(
+            f"\n[red]Error:[/red] {str(e)}", style=Style(color=NordTheme.NORD11)
         )
-        generator.logger.error(f"Fatal error: {str(e)}")
+        app.logger.error(f"Fatal error: {str(e)}", exc_info=True)
         sys.exit(1)
     finally:
-        generator.console.print("\nGoodbye!", style=Style(color=NordTheme.NORD14))
+        app.console.print("\nGoodbye!", style=Style(color=NordTheme.NORD14))
 
 
 if __name__ == "__main__":
