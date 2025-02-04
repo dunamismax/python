@@ -72,7 +72,7 @@ class NordTheme:
 # -----------------------------------------------------------------------------
 @dataclass
 class Config:
-    DEFAULT_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4")
+    DEFAULT_MODEL: str = os.getenv("OPENAI_MODEL", "chatgpt-4o-latest")
     THINKING_DELAY: int = int(os.getenv("THINKING_DELAY", "20"))  # 20 seconds
 
     BOT_1 = {
