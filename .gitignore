@@ -82,3 +82,6 @@ Thumbs.db
 # Miscellaneous editor files
 *.sublime-project
 *.sublime-workspace
+
+# Misc user additions:
+bot_options.txt
