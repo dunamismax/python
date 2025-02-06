@@ -12,22 +12,21 @@ A robust CLI chat interface that simulates conversations between AI bots with:
 - Bot selection
 """
 
+import logging
 import os
 import sys
 import time
-import logging
+from dataclasses import dataclass
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
 from typing import Dict, List
-from dataclasses import dataclass
 
-from dotenv import load_dotenv
 import openai  # For openai>=1.0.0
+from dotenv import load_dotenv
 from rich.console import Console
-from rich.text import Text
-from rich.style import Style
-from rich.status import Status
 from rich.prompt import Prompt
+from rich.status import Status
+from rich.style import Style
 
 # Load environment variables
 load_dotenv()
@@ -172,9 +171,7 @@ class BotConversationInterface:
         """Print a styled header at the start."""
         self.console.print()
         self.console.print(title, style=self.theme.style(self.theme.NORD8))
-        self.console.print(
-            "Press Ctrl+C to exit", style=self.theme.style(self.theme.NORD3)
-        )
+        self.console.print("Press Ctrl+C to exit", style=self.theme.style(self.theme.NORD3))
         self.console.print()
 
     def _typed_output(
@@ -235,9 +232,7 @@ class BotConversationInterface:
 
     def run_conversation(self) -> None:
         """Main conversation loop between the two bots (no streaming)."""
-        self._print_header(
-            f"AI Bot Conversation: {Config.BOT_1['name']} vs {Config.BOT_2['name']}"
-        )
+        self._print_header(f"AI Bot Conversation: {Config.BOT_1['name']} vs {Config.BOT_2['name']}")
         self.markdown_logger.log("Starting bot conversation")
 
         try:
@@ -267,9 +262,7 @@ class BotConversationInterface:
                         "content": "Please produce an engaging conversation starter now.",
                     },
                 ]
-                starter = self._get_completion(
-                    ai_starter_messages, Config.DEFAULT_MODEL
-                )
+                starter = self._get_completion(ai_starter_messages, Config.DEFAULT_MODEL)
                 # Show typed output for system's generated starter
                 self._typed_output("System", starter, NordTheme.NORD7)
                 self.markdown_logger.log(starter, "system")
@@ -306,13 +299,9 @@ class BotConversationInterface:
             ]
 
             # FIRST BOT RESPONDS to the starter
-            first_bot_response = self._get_completion(
-                first_bot_msgs, Config.DEFAULT_MODEL
-            )
+            first_bot_response = self._get_completion(first_bot_msgs, Config.DEFAULT_MODEL)
             # Show typed output
-            self._typed_output(
-                first_bot["name"], first_bot_response, first_bot["style"]
-            )
+            self._typed_output(first_bot["name"], first_bot_response, first_bot["style"])
             self.markdown_logger.log(first_bot_response, first_bot["name"])
 
             # Update histories
@@ -322,31 +311,19 @@ class BotConversationInterface:
             # Now alternate forever
             while True:
                 # SECOND BOT turn
-                second_bot_response = self._get_completion(
-                    second_bot_msgs, Config.DEFAULT_MODEL
-                )
-                self._typed_output(
-                    second_bot["name"], second_bot_response, second_bot["style"]
-                )
+                second_bot_response = self._get_completion(second_bot_msgs, Config.DEFAULT_MODEL)
+                self._typed_output(second_bot["name"], second_bot_response, second_bot["style"])
                 self.markdown_logger.log(second_bot_response, second_bot["name"])
 
-                second_bot_msgs.append(
-                    {"role": "assistant", "content": second_bot_response}
-                )
+                second_bot_msgs.append({"role": "assistant", "content": second_bot_response})
                 first_bot_msgs.append({"role": "user", "content": second_bot_response})
 
                 # FIRST BOT turn
-                first_bot_response = self._get_completion(
-                    first_bot_msgs, Config.DEFAULT_MODEL
-                )
-                self._typed_output(
-                    first_bot["name"], first_bot_response, first_bot["style"]
-                )
+                first_bot_response = self._get_completion(first_bot_msgs, Config.DEFAULT_MODEL)
+                self._typed_output(first_bot["name"], first_bot_response, first_bot["style"])
                 self.markdown_logger.log(first_bot_response, first_bot["name"])
 
-                first_bot_msgs.append(
-                    {"role": "assistant", "content": first_bot_response}
-                )
+                first_bot_msgs.append({"role": "assistant", "content": first_bot_response})
                 second_bot_msgs.append({"role": "user", "content": first_bot_response})
 
         except KeyboardInterrupt:
