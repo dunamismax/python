@@ -1,25 +1,14 @@
 #!/usr/bin/env python3
 """
-Terminal-based AI Bot Conversation
-------------------------------------
-A robust CLI chat interface that simulates conversations between AI bots with:
-- Nord color theme integration
-- No streaming from OpenAI; a spinner is shown while waiting,
-  then the bot's response is rendered with a typewriter effect.
-- Markdown logging for conversation history
-- A thinking delay spinner (customized per turn)
-- A user-provided or AI-generated conversation starter
-- Bot selection
 
-Improvements in this version:
-  • Uses the OpenAI v1.0 client interface with explicit client instantiation.
-  • Runs the API call in a separate thread to keep the spinner active for a full
-    configured delay (first response delay and subsequent response delay).
-  • For models (like "gpt-4o") that do not support system messages, converts any
-    message with role "system" to a "user" message (with a [SYSTEM] prefix) before sending.
-  • Incorporates the Nord color palette and Rich CLI components for an attractive UI.
-  • Provides production-grade logging (markdown-formatted, rotating logs) and robust error handling.
-  • Code is modular, type-annotated, and well documented.
+Terminal-based AI Bot Conversation
+CLI chat interface with AI bots featuring a Nord theme, Rich UI, spinner,
+typewriter-rendered responses, markdown logging, and adjustable delays.
+Supports both user-provided and AI-generated conversation starters with bot selection.
+Improvements: Uses the OpenAI v1.0 client with threaded API calls to maintain the spinner,
+automatically converts system messages for models without native support, and offers robust,
+modular, type-annotated code with production-grade rotating logs.
+
 """
 
 import logging
