@@ -1,34 +1,46 @@
 #!/usr/bin/env python3
 """
 Terminal-based AI Bot Conversation
----------------------------------
+------------------------------------
 A robust CLI chat interface that simulates conversations between AI bots with:
 - Nord color theme integration
-- *No Streaming from OpenAI*; we show a spinner while waiting,
-  then type out the bot's response with a typewriter effect.
+- No streaming from OpenAI; a spinner is shown while waiting,
+  then the bot's response is rendered with a typewriter effect.
 - Markdown logging for conversation history
-- Thinking delay spinner
-- User-provided or AI-generated conversation starter
+- A thinking delay spinner (customized per turn)
+- A user-provided or AI-generated conversation starter
 - Bot selection
+
+Improvements in this version:
+  • Uses the OpenAI v1.0 client interface with explicit client instantiation.
+  • Runs the API call in a separate thread to keep the spinner active for a full
+    configured delay (first response delay and subsequent response delay).
+  • For models (like "gpt-4o") that do not support system messages, converts any
+    message with role "system" to a "user" message (with a [SYSTEM] prefix) before sending.
+  • Incorporates the Nord color palette and Rich CLI components for an attractive UI.
+  • Provides production-grade logging (markdown-formatted, rotating logs) and robust error handling.
+  • Code is modular, type-annotated, and well documented.
 """
 
 import logging
 import os
 import sys
+import threading
 import time
-from dataclasses import dataclass
 from datetime import datetime
 from logging.handlers import RotatingFileHandler
-from typing import Dict, List
+from typing import Any, Dict, List, Optional
 
-import openai  # For openai>=1.0.0
 from dotenv import load_dotenv
+
+# Import the new OpenAI client from v1.0
+from openai import OpenAI
 from rich.console import Console
 from rich.prompt import Prompt
 from rich.status import Status
 from rich.style import Style
 
-# Load environment variables
+# Load environment variables from .env file if available.
 load_dotenv()
 
 
@@ -36,13 +48,13 @@ load_dotenv()
 # Nord Color Theme Configuration
 # -----------------------------------------------------------------------------
 class NordTheme:
-    NORD0 = "#2E3440"  # Dark bg
-    NORD1 = "#3B4252"  # Lighter bg
-    NORD2 = "#434C5E"  # Selection bg
+    NORD0 = "#2E3440"  # Dark background
+    NORD1 = "#3B4252"  # Lighter background
+    NORD2 = "#434C5E"  # Selection background
     NORD3 = "#4C566A"  # Inactive text
 
     # Snow Storm
-    NORD4 = "#D8DEE9"  # Text
+    NORD4 = "#D8DEE9"  # Default text
     NORD5 = "#E5E9F0"  # Light text
     NORD6 = "#ECEFF4"  # Bright text
 
@@ -60,22 +72,21 @@ class NordTheme:
     NORD15 = "#B48EAD"  # Purple
 
     @classmethod
-    def style(cls, color: str, bg: str = None) -> Style:
-        """Creates a Rich.Style object from color codes."""
-        if bg:
-            return Style(color=color, bgcolor=bg)
-        return Style(color=color)
+    def style(cls, color: str, bg: Optional[str] = None) -> Style:
+        """Return a Rich Style based on the provided text color and optional background."""
+        return Style(color=color, bgcolor=bg) if bg else Style(color=color)
 
 
 # -----------------------------------------------------------------------------
 # Configuration
 # -----------------------------------------------------------------------------
-@dataclass
 class Config:
-    DEFAULT_MODEL: str = os.getenv("OPENAI_MODEL", "chatgpt-4o-latest")
-    THINKING_DELAY: int = int(os.getenv("THINKING_DELAY", "5"))  # spinner time (secs)
+    DEFAULT_MODEL: str = os.getenv("OPENAI_MODEL", "gpt-4o")
+    # Delay parameters in seconds:
+    FIRST_RESPONSE_DELAY: int = int(os.getenv("FIRST_RESPONSE_DELAY", "5"))
+    SUBSEQUENT_RESPONSE_DELAY: int = int(os.getenv("SUBSEQUENT_RESPONSE_DELAY", "30"))
 
-    BOT_1 = {
+    BOT_1: Dict[str, Any] = {
         "name": os.getenv("BOT_1_NAME", "Bot Alpha"),
         "system_prompt": os.getenv(
             "BOT_1_PROMPT",
@@ -83,8 +94,7 @@ class Config:
         ),
         "style": NordTheme.NORD14,  # Green
     }
-
-    BOT_2 = {
+    BOT_2: Dict[str, Any] = {
         "name": os.getenv("BOT_2_NAME", "Bot Beta"),
         "system_prompt": os.getenv(
             "BOT_2_PROMPT",
@@ -98,18 +108,22 @@ class Config:
 # Markdown Logger
 # -----------------------------------------------------------------------------
 class MarkdownLogger:
-    """Handles markdown-formatted logging of bot conversations."""
+    """
+    Handles markdown-formatted logging of bot conversations.
+    Logs are written to a rotating file inside a "logs" directory.
+    """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.logger = self._setup_logger()
 
     def _setup_logger(self) -> logging.Logger:
+        """Sets up a rotating file logger with markdown formatting."""
+
         class MarkdownFormatter(logging.Formatter):
             def format(self, record: logging.LogRecord) -> str:
                 timestamp = self.formatTime(record, datefmt="%Y-%m-%d %H:%M:%S")
                 role = getattr(record, "role", "system")
                 message = (record.getMessage() or "").strip()
-
                 if role == "system":
                     return f"\n### {timestamp} - System Message\n{message}\n"
                 return f"\n#### {timestamp} - {role}\n{message}\n"
@@ -118,22 +132,17 @@ class MarkdownLogger:
         logger.setLevel(logging.INFO)
 
         if not logger.handlers:
-            # Create logs folder if needed
             os.makedirs("logs", exist_ok=True)
-
             now = datetime.now()
-            month_str = str(now.month)
-            day_str = str(now.day)
-            hour_min = now.strftime("%I:%M%p").lstrip("0")  # e.g. "3:16PM"
-            hour_min = hour_min[:-2] + hour_min[-2:].lower()  # "3:16pm"
-
-            date_str = f"{month_str}.{day_str}.{now.year}_{hour_min}"
+            date_str = (
+                now.strftime("%m.%d.%Y_%I:%M%p").lstrip("0").replace("AM", "am").replace("PM", "pm")
+            )
             bot1 = Config.BOT_1["name"]
             bot2 = Config.BOT_2["name"]
             file_name = f"{date_str}_ai_conversation_between_{bot1}_&_{bot2}.md"
             log_file = os.path.join("logs", file_name)
 
-            # Initialize file with a heading
+            # Initialize the log file with a header.
             with open(log_file, "w", encoding="utf-8") as f:
                 f.write("# AI Bot Conversation Log\n\n")
                 f.write(f"*Dialogue between {bot1} and {bot2}*\n\n")
@@ -156,14 +165,19 @@ class MarkdownLogger:
 
 
 # -----------------------------------------------------------------------------
-# BotConversationInterface
+# Bot Conversation Interface
 # -----------------------------------------------------------------------------
 class BotConversationInterface:
-    """Manages the bot conversation interface using Rich (no streaming)."""
+    """
+    Manages the bot conversation interface using Rich.
+    Displays headers, handles user input, and renders bot responses
+    using a typewriter effect, while logging the entire conversation.
+    """
 
-    def __init__(self):
+    def __init__(self) -> None:
         self.console = Console()
-        openai.api_key = os.getenv("OPENAI_API_KEY")
+        # Instantiate the new OpenAI client.
+        self.client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
         self.markdown_logger = MarkdownLogger()
         self.theme = NordTheme
 
@@ -182,75 +196,113 @@ class BotConversationInterface:
         typing_speed: float = 0.02,
     ) -> None:
         """
-        Type out `message` character by character, prefixed by speaker_label.
-        Example: "Bot Alpha: Hello world"
+        Display `message` character by character (a typewriter effect),
+        prefixed with `speaker_label`.
         """
-        # Print the speaker label in color first
-        self.console.print(
-            f"{speaker_label}: ",
-            style=self.theme.style(label_color),
-            end="",  # no newline
-        )
-
-        # Then type out the message
+        self.console.print(f"{speaker_label}: ", style=self.theme.style(label_color), end="")
         for char in message:
             self.console.print(char, style=self.theme.style(self.theme.NORD4), end="")
             time.sleep(typing_speed)
-        self.console.print("")  # Print empty string to force line break
-        self.console.print("")  # Print another empty line for spacing
+        self.console.print("\n")
 
-    def _get_completion(self, messages: List[Dict], model: str) -> str:
+    def _adjust_message_roles(
+        self, messages: List[Dict[str, str]], model: str
+    ) -> List[Dict[str, str]]:
         """
-        Makes a single (non-stream) call to the ChatCompletion API
-        and returns the assistant's text.
+        For models like "gpt-4o" that do not support messages with role 'system',
+        convert any system message to a user message prefixed with "[SYSTEM]".
+        """
+        if model.lower().startswith("gpt-4o"):
+            adjusted = []
+            for msg in messages:
+                if msg.get("role") == "system":
+                    adjusted.append({"role": "user", "content": "[SYSTEM] " + msg["content"]})
+                else:
+                    adjusted.append(msg)
+            return adjusted
+        return messages
 
-        Also ensures the spinner remains visible at least Config.THINKING_DELAY seconds.
+    def _get_completion(self, messages: List[Dict[str, str]], model: str, min_delay: int) -> str:
         """
+        Make a single (non-streaming) call to the OpenAI ChatCompletion API and
+        return the assistant's response.
+
+        The spinner remains active until both the API call completes and
+        at least `min_delay` seconds have elapsed.
+        """
+        result: Dict[str, Any] = {}
+        exception_holder: List[Exception] = []
+
+        def api_call():
+            try:
+                # Adjust message roles if needed.
+                adjusted_messages = self._adjust_message_roles(messages, model)
+                res = self.client.chat.completions.create(
+                    model=model,
+                    messages=adjusted_messages,
+                    store=True,  # Use store=True per latest docs if desired
+                )
+                result["completion"] = res
+            except Exception as e:
+                exception_holder.append(e)
+
+        thread = threading.Thread(target=api_call)
+        thread.start()
         start_time = time.time()
+
         with Status(
             "Thinking...",
             spinner="dots",
             spinner_style=self.theme.style(self.theme.NORD3),
             console=self.console,
         ):
-            # Single call (no streaming)
-            completion = openai.chat.completions.create(
-                model=model,
-                messages=messages,
-            )
-            end_time = time.time()
+            # Keep the spinner active until both conditions are met:
+            while thread.is_alive() or (time.time() - start_time < min_delay):
+                time.sleep(0.1)
+        thread.join()
 
-            # If the API call finishes quickly, we continue "thinking" until
-            # we've reached at least Config.THINKING_DELAY seconds.
-            api_time = end_time - start_time
-            if api_time < Config.THINKING_DELAY:
-                time.sleep(Config.THINKING_DELAY - api_time)
+        if exception_holder:
+            exc = exception_holder[0]
+            error_msg = f"OpenAI API error: {exc}"
+            self.console.print(error_msg, style=self.theme.style(self.theme.NORD11))
+            self.markdown_logger.log(error_msg, role="error")
+            raise exc
 
-        # Extract the text from completion
-        full_text = completion.choices[0].message.content
+        full_text = result["completion"].choices[0].message.content.strip()
         return full_text
 
+    def _update_histories(
+        self,
+        sender_history: List[Dict[str, str]],
+        receiver_history: List[Dict[str, str]],
+        message: str,
+        role_sent: str,
+        role_received: str,
+    ) -> None:
+        """
+        Update both bots’ message histories.
+        Adds the message as the sender's assistant response and as the receiver's user prompt.
+        """
+        sender_history.append({"role": role_sent, "content": message})
+        receiver_history.append({"role": role_received, "content": message})
+
     def run_conversation(self) -> None:
-        """Main conversation loop between the two bots (no streaming)."""
-        self._print_header(f"AI Bot Conversation: {Config.BOT_1['name']} vs {Config.BOT_2['name']}")
+        """Main conversation loop between the two bots (non-streaming)."""
+        title = f"AI Bot Conversation: {Config.BOT_1['name']} vs {Config.BOT_2['name']}"
+        self._print_header(title)
         self.markdown_logger.log("Starting bot conversation")
 
         try:
-            # Prompt user for conversation starter
             self.console.print(
-                "\n[bold cyan]Please input a conversation starter which will be sent "
-                "to the first bot (chosen next).[/bold cyan]"
+                "\n[bold cyan]Enter a conversation starter to send to the first bot.[/bold cyan]"
             )
-            user_starter = Prompt.ask(
-                "If you would rather have the AI generate a random conversation starter, just press Enter"
-            ).strip()
+            user_starter = Prompt.ask("Or press Enter to let the AI generate one").strip()
 
-            # If user left it blank, let AI generate a conversation starter
             if user_starter:
                 starter = user_starter
             else:
                 self.console.print(
-                    "\n[bold magenta]Generating conversation starter from AI...[/bold magenta]"
+                    "\n[bold magenta]Generating conversation starter...[/bold magenta]"
                 )
                 ai_starter_messages = [
                     {
@@ -262,23 +314,21 @@ class BotConversationInterface:
                         "content": "Please produce an engaging conversation starter now.",
                     },
                 ]
-                starter = self._get_completion(ai_starter_messages, Config.DEFAULT_MODEL)
-                # Show typed output for system's generated starter
+                starter = self._get_completion(
+                    ai_starter_messages, Config.DEFAULT_MODEL, min_delay=Config.FIRST_RESPONSE_DELAY
+                )
                 self._typed_output("System", starter, NordTheme.NORD7)
-                self.markdown_logger.log(starter, "system")
+                self.markdown_logger.log(starter, role="system")
 
-            # Choose which bot goes first
             self.console.print(
                 "\n[bold yellow]Choose which bot should respond first:[/bold yellow]"
             )
             self.console.print(f"  1) {Config.BOT_1['name']}")
             self.console.print(f"  2) {Config.BOT_2['name']}")
-
             choice = Prompt.ask(
-                "[bold green]Enter 1 or 2[/bold green]",
-                choices=["1", "2"],
-                default="1",
+                "[bold green]Enter 1 or 2[/bold green]", choices=["1", "2"], default="1"
             )
+
             if choice == "1":
                 first_bot = Config.BOT_1
                 second_bot = Config.BOT_2
@@ -286,73 +336,85 @@ class BotConversationInterface:
                 first_bot = Config.BOT_2
                 second_bot = Config.BOT_1
 
-            # Just one blank line here after the output
             self.console.print()
 
-            # Initialize message histories
-            first_bot_msgs = [
+            # Initialize message histories.
+            first_bot_msgs: List[Dict[str, str]] = [
                 {"role": "system", "content": first_bot["system_prompt"]},
                 {"role": "user", "content": starter},
             ]
-            second_bot_msgs = [
+            second_bot_msgs: List[Dict[str, str]] = [
                 {"role": "system", "content": second_bot["system_prompt"]},
             ]
 
-            # FIRST BOT RESPONDS to the starter
-            first_bot_response = self._get_completion(first_bot_msgs, Config.DEFAULT_MODEL)
-            # Show typed output
+            # FIRST BOT responds to the starter with a FIRST_RESPONSE_DELAY.
+            first_bot_response = self._get_completion(
+                first_bot_msgs, Config.DEFAULT_MODEL, min_delay=Config.FIRST_RESPONSE_DELAY
+            )
             self._typed_output(first_bot["name"], first_bot_response, first_bot["style"])
-            self.markdown_logger.log(first_bot_response, first_bot["name"])
+            self.markdown_logger.log(first_bot_response, role=first_bot["name"])
+            self._update_histories(
+                sender_history=first_bot_msgs,
+                receiver_history=second_bot_msgs,
+                message=first_bot_response,
+                role_sent="assistant",
+                role_received="user",
+            )
 
-            # Update histories
-            first_bot_msgs.append({"role": "assistant", "content": first_bot_response})
-            second_bot_msgs.append({"role": "user", "content": first_bot_response})
-
-            # Now alternate forever
+            # Now alternate turns indefinitely:
+            # Second bot and subsequent responses use the SUBSEQUENT_RESPONSE_DELAY.
             while True:
-                # SECOND BOT turn
-                second_bot_response = self._get_completion(second_bot_msgs, Config.DEFAULT_MODEL)
+                second_bot_response = self._get_completion(
+                    second_bot_msgs,
+                    Config.DEFAULT_MODEL,
+                    min_delay=Config.SUBSEQUENT_RESPONSE_DELAY,
+                )
                 self._typed_output(second_bot["name"], second_bot_response, second_bot["style"])
-                self.markdown_logger.log(second_bot_response, second_bot["name"])
+                self.markdown_logger.log(second_bot_response, role=second_bot["name"])
+                self._update_histories(
+                    sender_history=second_bot_msgs,
+                    receiver_history=first_bot_msgs,
+                    message=second_bot_response,
+                    role_sent="assistant",
+                    role_received="user",
+                )
 
-                second_bot_msgs.append({"role": "assistant", "content": second_bot_response})
-                first_bot_msgs.append({"role": "user", "content": second_bot_response})
-
-                # FIRST BOT turn
-                first_bot_response = self._get_completion(first_bot_msgs, Config.DEFAULT_MODEL)
+                first_bot_response = self._get_completion(
+                    first_bot_msgs, Config.DEFAULT_MODEL, min_delay=Config.SUBSEQUENT_RESPONSE_DELAY
+                )
                 self._typed_output(first_bot["name"], first_bot_response, first_bot["style"])
-                self.markdown_logger.log(first_bot_response, first_bot["name"])
-
-                first_bot_msgs.append({"role": "assistant", "content": first_bot_response})
-                second_bot_msgs.append({"role": "user", "content": first_bot_response})
+                self.markdown_logger.log(first_bot_response, role=first_bot["name"])
+                self._update_histories(
+                    sender_history=first_bot_msgs,
+                    receiver_history=second_bot_msgs,
+                    message=first_bot_response,
+                    role_sent="assistant",
+                    role_received="user",
+                )
 
         except KeyboardInterrupt:
             self.console.print(
-                "\nConversation ended by user",
-                style=self.theme.style(self.theme.NORD9),
+                "\nConversation ended by user", style=self.theme.style(self.theme.NORD9)
             )
             self.markdown_logger.log("Conversation ended by user")
         except Exception as e:
-            self.console.print(
-                f"\nError: {str(e)}",
-                style=Style(color=NordTheme.NORD11),
-            )
-            self.markdown_logger.log(f"Fatal error: {str(e)}")
+            error_text = f"Fatal error: {e}"
+            self.console.print(f"\n{error_text}", style=self.theme.style(self.theme.NORD11))
+            self.markdown_logger.log(error_text)
             sys.exit(1)
 
-    def close(self):
-        """Any final cleanup."""
+    def close(self) -> None:
+        """Perform any necessary cleanup before exiting."""
         self.console.print("\nGoodbye!", style=Style(color=NordTheme.NORD14))
 
 
 # -----------------------------------------------------------------------------
-# main()
+# Main Entry Point
 # -----------------------------------------------------------------------------
-def main():
-    """Main entry point."""
+def main() -> None:
+    """Main entry point for the AI Bot Conversation program."""
     if not os.getenv("OPENAI_API_KEY"):
-        console = Console()
-        console.print(
+        Console().print(
             "Error: OPENAI_API_KEY environment variable not set",
             style=Style(color=NordTheme.NORD11),
         )
