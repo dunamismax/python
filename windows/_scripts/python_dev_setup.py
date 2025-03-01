@@ -31,13 +31,11 @@ from pathlib import Path
 from datetime import datetime
 
 # Setup logging
+log_file = os.path.join(os.path.expanduser("~"), "python_setup.log")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s - %(levelname)s - %(message)s",
-    handlers=[
-        logging.StreamHandler(),
-        logging.FileHandler(os.path.join(os.path.expanduser("~"), "python_setup.log")),
-    ],
+    handlers=[logging.StreamHandler(), logging.FileHandler(log_file, encoding="utf-8")],
 )
 logger = logging.getLogger(__name__)
 
@@ -90,22 +88,22 @@ def print_header(text):
 
 def print_step(text):
     """Print a step description."""
-    logger.info(f"• {text}")
+    logger.info(f"STEP: {text}")
 
 
 def print_success(message):
     """Print a success message."""
-    logger.info(f"✓ {message}")
+    logger.info(f"SUCCESS: {message}")
 
 
 def print_warning(message):
     """Print a warning message."""
-    logger.warning(f"⚠ {message}")
+    logger.warning(f"WARNING: {message}")
 
 
 def print_error(message):
     """Print an error message."""
-    logger.error(f"✗ {message}")
+    logger.error(f"ERROR: {message}")
 
 
 def run_command(cmd, shell=False, check=True, capture_output=True):
@@ -353,14 +351,14 @@ def create_completion_script():
 
     # Check if profile already exists and append to it
     if os.path.exists(ps_profile_path):
-        with open(ps_profile_path, "r") as f:
+        with open(ps_profile_path, "r", encoding="utf-8") as f:
             content = f.read()
     else:
         content = ""
 
     # Only add if not already there
     if "# Python development environment setup" not in content:
-        with open(ps_profile_path, "a") as f:
+        with open(ps_profile_path, "a", encoding="utf-8") as f:
             f.write("""
 # Python development environment setup
 function New-PythonVenv {
@@ -425,15 +423,15 @@ Project description goes here.
 
 ## Installation
 
-\`\`\`
+```
 pip install -e .
-\`\`\`
+```
 
 ## Usage
 
-\`\`\`python
+```python
 import $Name
-\`\`\`
+```
 "@ | Out-File -FilePath "README.md"
     
     # Initialize Git if requested
@@ -482,7 +480,7 @@ Register-ArgumentCompleter -CommandName python, python3, py -Native
 
     # Create a batch file for CMD users
     cmd_script_path = os.path.join(HOME_DIR, "python_helpers.bat")
-    with open(cmd_script_path, "w") as f:
+    with open(cmd_script_path, "w", encoding="utf-8") as f:
         f.write("""@echo off
 :: Python development helpers for Command Prompt
 :: Add this to your path or create shortcuts
@@ -551,7 +549,7 @@ def configure_git():
 
     # Create global gitignore for Python
     git_ignore_path = os.path.join(HOME_DIR, ".gitignore_global_python")
-    with open(git_ignore_path, "w") as f:
+    with open(git_ignore_path, "w", encoding="utf-8") as f:
         f.write("""# Python gitignore
 __pycache__/
 *.py[cod]
@@ -653,17 +651,18 @@ def generate_summary():
     for tool in PIP_TOOLS:
         tool_path = shutil.which(tool)
         if tool_path:
-            summary.append(f"  ✓ {tool} ({tool_path})")
+            summary.append(f"  {tool} ({tool_path})")
         else:
-            summary.append(f"  ✗ {tool} (not found in PATH)")
+            summary.append(f"  {tool} (not found in PATH)")
 
     # Log the summary
+    # Log the summary
     for line in summary:
-        logger.info(line)
+        logger.info(line.replace("✓", "").replace("✗", ""))
 
     # Create a report file in the user's home directory
     report_path = os.path.join(HOME_DIR, "python_setup_report.txt")
-    with open(report_path, "w") as f:
+    with open(report_path, "w", encoding="utf-8") as f:
         f.write(
             f"Python Development Environment Setup - {datetime.now().strftime('%Y-%m-%d %H:%M:%S')}\n"
         )
