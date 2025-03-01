@@ -944,7 +944,6 @@ def main_menu():
         clear_screen()
         print_header(APP_NAME)
         print_info(f"Version: {VERSION}")
-        print_info(f"System: {platform.system()} {platform.release()}")
         print_info(f"User: {os.environ.get('USERNAME', 'Unknown')}")
         print_info(f"Time: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M:%S')}")
         print_info(f"Admin privileges: {'Yes' if is_admin() else 'No'}")
