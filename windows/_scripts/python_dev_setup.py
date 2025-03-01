@@ -50,6 +50,8 @@ SCRIPTS_DIR = os.path.join(
 # Python tools to install with pip
 PIP_TOOLS = [
     "black",
+    "rich",
+    "pyfiglet",
     "isort",
     "flake8",
     "mypy",
