@@ -231,6 +231,8 @@ The `requirements.txt` lockfile must be committed to version control. The enviro
 
 ---
 
+UP TO HERE!!!
+
 ## **Phase 4: Frontend & API Assembly**
 
 **Objective:** Construct the user interface using pure HTML/HTMX/CSS, build the FastAPI router to serve the application, and assemble the final service.
