@@ -85,3 +85,34 @@ Thumbs.db
 
 # Misc user additions:
 bot_options.txt
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.Python
+env/
+.venv/
+venv/
+
+# Database
+*.db
+*.db-journal
+*.sqlite
+*.sqlite3
+
+# Build artifacts
+build/
+dist/
+*.egg-info/
+*.egg
+
+# Caches
+.pytest_cache/
+.ruff_cache/
+.ty-cache/
+
+# IDE
+.idea/
+.vscode/
