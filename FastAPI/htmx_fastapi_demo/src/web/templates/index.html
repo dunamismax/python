@@ -1,0 +1,39 @@
+{% extends "base.html" %}
+
+<!-- 
+    filename: index.html
+    author: dunamismax
+    version: 1.0.0
+    date: 06-17-2025
+    github: https://github.com/dunamismax
+    description: Main content page for the item list application.
+-->
+
+{% block content %}
+<section id="item-form-section">
+  <h2>Add a New Item</h2>
+  <form
+    id="item-form"
+    hx-post="{{ url_for('add_item') }}"
+    hx-target="#item-list"
+    hx-swap="afterbegin"
+    hx-trigger="submit"
+  >
+    <input
+      type="text"
+      id="itemName"
+      name="itemName"
+      placeholder="Enter item name..."
+      required
+    />
+    <button type="submit">Add Item</button>
+  </form>
+</section>
+
+<section id="item-list-section">
+  <h2>Items</h2>
+  <ul id="item-list">
+    {% for item in items %} {% include "partials/item.html" %} {% endfor %}
+  </ul>
+</section>
+{% endblock %}

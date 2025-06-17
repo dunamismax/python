@@ -1,0 +1,46 @@
+# -----------------------------------------------------------------------------
+# filename: pyproject.toml
+# author: dunamismax
+# version: 1.0.0
+# date: 06-17-2025
+# github: https://github.com/dunamismax
+# description: Project definition for the FastAPI HTMX demo application.
+# -----------------------------------------------------------------------------
+
+[project]
+name = "htmx_fastapi_demo"
+version = "1.0.0"
+description = "A demonstration of a modern web application using FastAPI and HTMX."
+authors = [{ name = "dunamismax", email = "dunamismax@example.com" }]
+readme = "README.md"
+requires-python = ">=3.12"
+license = { text = "MIT" }
+
+dependencies = [
+    "fastapi",
+    "uvicorn[standard]",
+    "pydantic>=2.7.0",
+    "pydantic-settings",
+    "structlog",
+    "jinja2",
+    "fastapi-htmx",
+    "python-dotenv",
+    "python-multipart",
+]
+
+[project.optional-dependencies]
+dev = [
+    "ruff",
+    "ty",
+]
+
+[tool.ruff]
+line-length = 88
+target-version = "py312"
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "W", "C90", "N", "UP", "B", "A", "S"]
+ignore = ["S101"] # Ignore assert statements for this demo
+
+[tool.ty]
+packages = ["src"]

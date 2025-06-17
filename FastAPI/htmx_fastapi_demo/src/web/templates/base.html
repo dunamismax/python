@@ -1,0 +1,35 @@
+<!DOCTYPE html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <!-- 
+        filename: base.html
+        author: dunamismax
+        version: 1.0.0
+        date: 06-17-2025
+        github: https://github.com/dunamismax
+        description: Base HTML template with HTMX and vanilla CSS.
+    -->
+    <title>{{ settings.APP_NAME }}</title>
+    <link
+      rel="stylesheet"
+      href="{{ url_for('static', path='/css/styles.css') }}"
+    />
+  </head>
+  <body>
+    <div class="container">
+      <header>
+        <h1>{{ settings.APP_NAME }}</h1>
+      </header>
+      <main>{% block content %}{% endblock %}</main>
+    </div>
+
+    <!-- HTMX Core -->
+    <script
+      src="https://unpkg.com/htmx.org@1.9.12"
+      integrity="sha384-ujb1lZYygJmzgSwoxRggbCHcjc0rB2XoQrxeTUQyRjrOnlCoYta87iKBWq3EsdM2"
+      crossorigin="anonymous"
+    ></script>
+  </body>
+</html>
