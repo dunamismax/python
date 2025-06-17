@@ -1,35 +1,153 @@
-# HTMX FastAPI Demo
+<div align="center">
+<pre>
+    ______           __  ___    ____  ____
+   / ____/___ ______/ /_/   |  / __ \/  _/
+  / /_  / __ `/ ___/ __/ /| | / /_/ // /  
+ / __/ / /_/ (__  ) /_/ ___ |/ ____// /
+/_/    \__,_/____/\__/_/  |_/_/   /___/
+</pre>
+</div>
 
-**Author:** dunamismax  
-**Version:** 1.0.0  
-**Date:** 06-17-2025  
-**GitHub:** https://github.com/dunamismax
+<p align="center">
+  A demonstration of a modern, production-ready web application.
+  <br />
+  Built with a high-performance FastAPI backend and a dynamic, zero-JavaScript HTMX frontend.
+</p>
 
-A demonstration of a modern web application using FastAPI and HTMX, built with a professional, production-ready toolchain.
+<p align="center">
+  <a href="https://www.python.org/"><img src="https://img.shields.io/badge/Language-Python_3.12+-blue.svg" alt="Python"></a>
+  <a href="https://fastapi.tiangolo.com/"><img src="https://img.shields.io/badge/Backend-FastAPI-009688.svg" alt="FastAPI"></a>
+  <a href="https://htmx.org/"><img src="https://img.shields.io/badge/Frontend-HTMX-3498DB.svg" alt="HTMX"></a>
+  <a href="https://astral.sh/uv"><img src="https://img.shields.io/badge/Tools-UV-9C4FFF.svg" alt="UV"></a>
+  <a href="https://github.com/dunamismax/htmx_fastapi_demo/blob/main/LICENSE"><img src="https://img.shields.io/badge/License-MIT-yellow.svg" alt="License: MIT"></a>
+  <a href="https://github.com/dunamismax/htmx_fastapi_demo/pulls"><img src="https://img.shields.io/badge/PRs-welcome-brightgreen.svg?style=flat-square" alt="PRs Welcome"></a>
+  <a href="https://github.com/dunamismax/htmx_fastapi_demo/stargazers"><img src="https://img.shields.io/github/stars/dunamismax/htmx_fastapi_demo?style=social" alt="GitHub Stars"></a>
+</p>
 
-## Core Technologies
+---
 
-- **Backend:** FastAPI
-- **Frontend:** HTML, vanilla CSS, HTMX
-- **Tooling:** UV for environment and package management
-- **Code Quality:** Ruff (linting/formatting), Ty (type checking)
-- **Logging:** Structlog for structured JSON logging
+## ✨ Guiding Philosophy
 
-## Setup and Execution
+This project serves as a reference architecture, built upon several core principles:
 
-This project is managed exclusively with `uv`.
+- **The Async Mandate**: Every I/O operation (network, file) is asynchronous using `async`/`await`. A non-blocking architecture is not optional; it is fundamental.
+- **Modern & Performant Tooling**: We leverage the full power of the modern Python ecosystem. The project is managed exclusively by **UV**, the high-performance package manager and installer.
+- **Zero-JavaScript Frontend**: We believe in the power of hypermedia. The entire UI is rendered on the server and made dynamic with **HTMX**, resulting in a lightweight, fast, and accessible frontend without a single line of client-side JavaScript.
+- **Architecture as Law**: The system follows a strict, modular structure. Code is organized by feature, validated with Pydantic, and logged with `structlog` to ensure maintainability and production-readiness from inception.
+
+---
+
+## 🚀 Getting Started
+
+This project is managed exclusively with `uv`. Follow these steps precisely.
 
 ### 1. Prerequisite: Install UV
 
-If you do not have `uv` installed, run the following command:
-
-````bash
-curl -LsSf https://astral.sh/uv/install.sh | sh```
-
-### 2. Install Python
-
-This project requires Python 3.12+. Use `uv` to install and manage the Python version.
+If `uv` is not installed on your system, execute the following command. This is a one-time setup.
 
 ```bash
+curl -LsSf https://astral.sh/uv/install.sh | sh
+```
+
+Follow any on-screen instructions to add `uv` to your system's PATH.
+
+### 2. Environment Setup
+
+Clone the repository and navigate into the project directory.
+
+```bash
+# Clone the repository
+git clone https://github.com/dunamismax/htmx_fastapi_demo.git
+cd htmx_fastapi_demo
+
+# Install the correct Python version using uv
 uv python install 3.13
-````
+
+# Create the virtual environment
+uv venv
+```
+
+`uv` will automatically use the `.venv` directory for all subsequent commands.
+
+### 3. Install Dependencies
+
+Install all project dependencies from the lock file using a single command.
+
+```bash
+# Sync the environment from the lock file
+uv pip sync requirements.lock
+```
+
+_Note: If `requirements.lock` is missing or you change dependencies in `pyproject.toml`, regenerate it with `uv pip compile pyproject.toml -o requirements.lock`._
+
+### 4. Run the Development Server
+
+With the environment synced, run the application using `uv run`.
+
+```bash
+# The --reload flag enables hot-reloading for development
+uv run uvicorn src.app.main:app --reload
+```
+
+Navigate to `http://127.0.0.1:8000`. You will see the live application.
+
+---
+
+## 🏗️ Project Structure
+
+The application is organized using a clean `src` layout that separates concerns.
+
+```text
+htmx_fastapi_demo/
+├── .gitignore
+├── .vscode/
+│   └── settings.json         # VSCode settings for formatting and linting
+├── pyproject.toml              # Project metadata and dependencies (PEP 621)
+├── README.md
+├── requirements.lock           # Deterministic lock file generated by uv
+├── src/
+│   ├── app/
+│   │   ├── config.py           # Pydantic settings management
+│   │   ├── main.py             # FastAPI application entry point
+│   │   ├── schemas.py          # Pydantic data validation models
+│   │   └── services.py         # Business logic / data repository layer
+│   ├── core/
+│   │   └── logging_config.py   # Structured logging configuration
+│   └── web/
+│       ├── routes.py           # FastAPI router for all HTML/HTMX endpoints
+│       └── templates/
+│           ├── base.html       # Base layout template
+│           ├── index.html      # Main page template
+│           └── partials/
+│               └── item.html   # HTMX partial for a single item
+└── static/
+    └── css/
+        └── styles.css          # Vanilla CSS for styling
+```
+
+---
+
+## 🤝 Contribute
+
+This reference architecture is built for the community. We need your help to improve it!
+
+- **Report Bugs:** Find something broken? [Open an issue](https://github.com/dunamismax/htmx_fastapi_demo/issues) and provide as much detail as possible.
+- **Suggest Improvements:** Have an idea for a better pattern or a new feature demonstration? [Start a discussion](https://github.com/dunamismax/htmx_fastapi_demo/discussions).
+- **Write Code:** Grab an open issue and [submit a Pull Request](https://github.com/dunamismax/htmx_fastapi_demo/pulls).
+- **Improve Documentation:** Great documentation is as important as great code. Help us make our guides clearer.
+
+If this project helps you, please **give it a star!** ⭐ It helps gain visibility and attract more talented contributors.
+
+### Connect
+
+Connect with the author, **dunamismax**, on:
+
+- **Twitter:** [@dunamismax](https://twitter.com/dunamismax)
+- **Bluesky:** [@dunamismax.bsky.social](https://bsky.app/profile/dunamismax.bsky.social)
+- **Reddit:** [u/dunamismax](https://www.reddit.com/user/dunamismax)
+- **Discord:** `dunamismax`
+- **Signal:** `dunamismax.66`
+
+## 📜 License
+
+This project is licensed under the **MIT License**. See the `LICENSE` file for details.
