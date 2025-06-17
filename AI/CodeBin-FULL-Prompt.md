@@ -1,5 +1,24 @@
 # Now please review my project info and take it all into context:
 
+## 1. Project: "CodeBin" - A Modern, HTMX-Powered Pastebin
+
+* **Core Concept:** A minimalist and secure web service for sharing code snippets, built with a FastAPI backend and a hyper-dynamic HTMX frontend. It will prioritize simplicity, performance, and security.
+
+* **Key Learning Opportunities:**
+  * **FastAPI:** Building a robust, asynchronous API with path parameters (for paste retrieval) and Pydantic-based request bodies (for paste submission).
+  * **HTMX:** Mastering zero-javascript frontend development. The form submission, "copy to clipboard" functionality, and display of new pastes will all be handled via HTMX attributes.
+  * **Raw SQL & Repository Pattern:** Implementing a repository to handle the `CREATE` and `READ` operations for pastes using `aiosqlite` (for simplicity) or `asyncpg` (for production-grade performance). You will handle generating unique, short URLs for each paste and manage automatic expiration.
+  * **Security:** Using Pydantic for strict input validation on the paste content and settings. Implementing server-side syntax highlighting to avoid XSS vulnerabilities common in client-side highlighters.
+  * **Testing:** Writing `pytest` unit tests for the API endpoints and repository logic, ensuring paste creation and retrieval work as expected.
+
+* **Architectural Blueprint:**
+  * **Backend:** FastAPI application.
+  * **Schemas:** Pydantic models for `PasteCreate` (content, language, expiration) and `PasteRead` (content, language, creation\_date).
+  * **Repository:** An `AsyncPasteRepository` class with methods like `create_paste` and `get_paste_by_slug`, using parameterized, raw SQL queries.
+  * **Frontend:** A single HTML file with templates for the main page and the "paste view" fragment, dynamically updated by HTMX.
+
+---
+
 <div align="center">
 <pre>
 ______          __     ____  _
@@ -31,10 +50,10 @@ ______          __     ____  _
 
 CodeBin is built on a few core principles:
 
-- **Simplicity by Design**: We prioritize a clean, uncluttered user experience. The goal is to make sharing code instantaneous and effortless, without unnecessary features.
-- **Modern & Performant Backend**: We leverage the full power of the modern Python ecosystem. The asynchronous FastAPI framework, combined with raw `asyncpg` or `aiosqlite` queries, ensures a non-blocking and highly efficient backend.
-- **Zero-JavaScript Frontend**: We believe in the power of hypermedia. The entire user interface is rendered on the server and made dynamic with **HTMX**, resulting in a lightweight, fast, and accessible frontend without a single line of client-side JavaScript.
-- **Security First**: All user input is treated as untrusted. We use Pydantic for rigorous data validation and raw, parameterized SQL queries to eliminate the risk of SQL injection. Syntax highlighting is performed securely on the server to prevent XSS vulnerabilities.
+* **Simplicity by Design**: We prioritize a clean, uncluttered user experience. The goal is to make sharing code instantaneous and effortless, without unnecessary features.
+* **Modern & Performant Backend**: We leverage the full power of the modern Python ecosystem. The asynchronous FastAPI framework, combined with raw `asyncpg` or `aiosqlite` queries, ensures a non-blocking and highly efficient backend.
+* **Zero-JavaScript Frontend**: We believe in the power of hypermedia. The entire user interface is rendered on the server and made dynamic with **HTMX**, resulting in a lightweight, fast, and accessible frontend without a single line of client-side JavaScript.
+* **Security First**: All user input is treated as untrusted. We use Pydantic for rigorous data validation and raw, parameterized SQL queries to eliminate the risk of SQL injection. Syntax highlighting is performed securely on the server to prevent XSS vulnerabilities.
 
 ---
 
@@ -92,6 +111,7 @@ codebin/
 │       │   └── router.py           # FastAPI router for all paste-related endpoints.
 │       ├── core/
 │       │   └── security.py         # Utility functions for generating secure slugs.
+add config.py here!
 │       ├── db/
 │       │   ├── database.py         # Database connection management and schema initialization.
 │       │   └── repository.py       # The AsyncPasteRepository for all database operations.
@@ -119,10 +139,10 @@ codebin/
 
 Whether you're a seasoned Python developer or a web enthusiast looking for an exciting open-source project, there are many ways to contribute:
 
-- **Report Bugs:** Find something broken? [Open an issue](https://github.com/dunamismax/CodeBin/issues) and provide as much detail as possible.
-- **Suggest Features:** Have a great idea for a new feature or a better API? [Start a discussion](https://github.com/dunamismax/CodeBin/discussions) or open a feature request issue.
-- **Write Code:** Grab an open issue, a bug, or implement a new feature. [Submit a Pull Request](https://github.com/dunamismax/CodeBin/pulls) and we'll review it together.
-- **Improve Documentation:** Great documentation is as important as great code. Help us make our guides and examples clearer and more comprehensive.
+* **Report Bugs:** Find something broken? [Open an issue](https://github.com/dunamismax/CodeBin/issues) and provide as much detail as possible.
+* **Suggest Features:** Have a great idea for a new feature or a better API? [Start a discussion](https://github.com/dunamismax/CodeBin/discussions) or open a feature request issue.
+* **Write Code:** Grab an open issue, a bug, or implement a new feature. [Submit a Pull Request](https://github.com/dunamismax/CodeBin/pulls) and we'll review it together.
+* **Improve Documentation:** Great documentation is as important as great code. Help us make our guides and examples clearer and more comprehensive.
 
 If this project excites you, please **give it a star!** ⭐ It helps us gain visibility and attract more talented contributors like you.
 
@@ -130,195 +150,16 @@ If this project excites you, please **give it a star!** ⭐ It helps us gain vis
 
 Connect with the author, **dunamismax**, on:
 
-- **Twitter:** [@dunamismax](https://twitter.com/dunamismax)
-- **Bluesky:** [@dunamismax.bsky.social](https://bsky.app/profile/dunamismax.bsky.social)
-- **Reddit:** [u/dunamismax](https://www.reddit.com/user/dunamismax)
-- **Discord:** `dunamismax`
-- **Signal:** `dunamismax.66`
+* **Twitter:** [@dunamismax](https://twitter.com/dunamismax)
+* **Bluesky:** [@dunamismax.bsky.social](https://bsky.app/profile/dunamismax.bsky.social)
+* **Reddit:** [u/dunamismax](https://www.reddit.com/user/dunamismax)
+* **Discord:** `dunamismax`
+* **Signal:** `dunamismax.66`
 
 ## 📜 License
 
 This project is licensed under the **MIT License**. See the `LICENSE` file for details.
-<br />
-<p align="center">
-  <img src="https://media2.giphy.com/media/v1.Y2lkPTc5MGI3NjExNm5wbXA1ZWV6cjB2Ync5eTk2cXBocjVkdTVjMDBxZ3phNjYyMTZsYSZlcD12MV9pbnRlcm5hbF9naWZfYnlfaWQmY3Q9Zw/13HgwGsXF0aiGY/giphy.gif" alt="IT Crowd Fire GIF">
-</p>
 
-## 1. Project: "CodeBin" - A Modern, HTMX-Powered Pastebin
+The project structure and actual file names and locations can be changed if needed during the process of creating this project.
 
-- **Core Concept:** A minimalist and secure web service for sharing code snippets, built with a FastAPI backend and a hyper-dynamic HTMX frontend. It will prioritize simplicity, performance, and security.
-
-- **Key Learning Opportunities:**
-  - **FastAPI:** Building a robust, asynchronous API with path parameters (for paste retrieval) and Pydantic-based request bodies (for paste submission).
-  - **HTMX:** Mastering zero-javascript frontend development. The form submission, "copy to clipboard" functionality, and display of new pastes will all be handled via HTMX attributes.
-  - **Raw SQL & Repository Pattern:** Implementing a repository to handle the `CREATE` and `READ` operations for pastes using `aiosqlite` (for simplicity) or `asyncpg` (for production-grade performance). You will handle generating unique, short URLs for each paste and manage automatic expiration.
-  - **Security:** Using Pydantic for strict input validation on the paste content and settings. Implementing server-side syntax highlighting to avoid XSS vulnerabilities common in client-side highlighters.
-  - **Testing:** Writing `pytest` unit tests for the API endpoints and repository logic, ensuring paste creation and retrieval work as expected.
-
-- **Architectural Blueprint:**
-  - **Backend:** FastAPI application.
-  - **Schemas:** Pydantic models for `PasteCreate` (content, language, expiration) and `PasteRead` (content, language, creation\_date).
-  - **Repository:** An `AsyncPasteRepository` class with methods like `create_paste` and `get_paste_by_slug`, using parameterized, raw SQL queries.
-  - **Frontend:** A single HTML file with templates for the main page and the "paste view" fragment, dynamically updated by HTMX.
-
-  # pyproject.toml
-
-[project]
-name = "codebin"
-version = "1.0.0"
-description = "A minimalist, modern, and secure web service for sharing code snippets."
-authors = [{ name = "dunamismax", email = "dunamismax@users.noreply.github.com" }]
-license = { text = "MIT" }
-readme = "README.md"
-requires-python = ">=3.12"
-classifiers = [
-    "Development Status :: 4 - Beta",
-    "Framework :: FastAPI",
-    "Intended Audience :: Developers",
-    "License :: OSI Approved :: MIT License",
-    "Programming Language :: Python :: 3",
-    "Programming Language :: Python :: 3.12",
-    "Topic :: Internet :: WWW/HTTP",
-    "Topic :: Software Development :: Libraries :: Python Modules",
-]
-
-# Core runtime dependencies for the application
-
-dependencies = [
-    "fastapi",
-    "uvicorn[standard]",
-    "aiosqlite",
-    "pydantic",
-    "pydantic-settings",
-    "jinja2",
-    "pygments",
-    "python-multipart",
-    "structlog",
-    "fastapi-htmx", # CORRECTED: Package name fixed from 'htmx-fastapi'
-]
-
-[project.urls]
-Homepage = "<https://github.com/dunamismax/CodeBin>"
-Repository = "<https://github.com/dunamismax/CodeBin>"
-Issues = "<https://github.com/dunamismax/CodeBin/issues>"
-
-# Optional dependencies exclusively for testing
-
-[project.optional-dependencies]
-test = [
-    "pytest",
-    "pytest-asyncio",
-    "httpx",
-]
-
-# Tool configuration for Ruff (linter and formatter)
-
-[tool.ruff]
-line-length = 88
-target-version = "py312"
-
-[tool.ruff.lint]
-select = [ "E", "W", "F", "I", "D", "UP", "B", "A", "C4", "SIM", "PT", "RUF" ]
-ignore = ["D100", "D104", "D107"]
-
-[tool.ruff.format]
-quote-style = "double"
-indent-style = "space"
-skip-magic-trailing-comma = false
-line-ending = "lf"
-
-requirements.txt:
-
-#
-
-# This file was autogenerated by uv via the following command:
-
-# uv pip compile pyproject.toml --all-extras -o requirements.txt
-
-#
-
-aiosqlite==0.21.0
-    # via codebin
-anyio==4.4.0
-    # via
-    #   httpx
-    #   starlette
-    #   uvicorn
-async-timeout==5.0.1
-    # via pytest-asyncio
-fastapi==0.115.12
-    # via
-    #   codebin
-    #   fastapi-htmx
-fastapi-htmx==0.5.0
-    # via codebin
-h11==0.16.0
-    # via
-    #   httpcore
-    #   uvicorn
-httpcore==1.0.5
-    # via httpx
-httptools==0.6.1
-    # via uvicorn
-httpx==0.28.1
-    # via codebin (project.optional-dependencies.test)
-iniconfig==2.0.0
-    # via pytest
-jinja2==3.1.4
-    # via
-    #   codebin
-    #   fastapi-htmx
-markupsafe==3.0.2
-    # via jinja2
-packaging==25.0
-    # via pytest
-pluggy==1.5.0
-    # via pytest
-pydantic==2.8.2
-    # via
-    #   codebin
-    #   fastapi
-    #   pydantic-settings
-pydantic-core==2.20.1
-    # via pydantic
-pydantic-settings==2.3.4
-    # via codebin
-pygments==2.18.0
-    # via codebin
-python-dateutil==2.9.0.post0
-    # via uvicorn
-python-dotenv==1.0.1
-    # via pydantic-settings
-python-multipart==0.0.20
-    # via
-    #   codebin
-    #   fastapi
-pytest==8.2.2
-    # via codebin (project.optional-dependencies.test)
-pytest-asyncio==1.0.0
-    # via codebin (project.optional-dependencies.test)
-six==1.16.0
-    # via python-dateutil
-sniffio==1.3.1
-    # via
-    #   anyio
-    #   httpcore
-starlette==0.47.0
-    # via fastapi
-structlog==25.4.0
-    # via codebin
-typing-extensions==4.12.2
-    # via
-    #   anyio
-    #   pydantic
-    #   starlette
-uvicorn==0.34.3
-    # via codebin
-uvloop==0.21.0
-    # via uvicorn
-watchfiles==1.1.0
-    # via uvicorn
-websockets==15.0.1
-    # via uvicorn
-
-DO NOT GENERATE OR WRITE ANY CODE YET SIMPLY ACKNOWLEDGE THE PROJECTS STRUCTURE AND PURPOSE.
+Do not generate any code or files yet simply ask for direction.
